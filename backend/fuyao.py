@@ -8,7 +8,10 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
+from .logging_setup import get_logger
+
 CST = timezone(timedelta(hours=8))  # Asia/Shanghai, no DST
+log = get_logger("fuyao")
 
 
 class FuyaoError(Exception):
@@ -40,6 +43,7 @@ class FuyaoClient:
         self._client = httpx.Client(
             headers={"X-api-key": api_key},
             timeout=timeout,
+            trust_env=False,
             transport=transport,
         )
         self._throttle_lock = threading.Lock()
@@ -60,6 +64,7 @@ class FuyaoClient:
         last_err: Exception | None = None
         for attempt in range(self.max_retries + 1):
             if attempt:
+                log.warning("扶摇重试 %d/%d path=%s", attempt, self.max_retries, path)
                 time.sleep(delay + random.uniform(0, 0.4))
                 delay *= 3
             self._throttle()
@@ -77,8 +82,11 @@ class FuyaoClient:
                 last_err = FuyaoError(4001, data.get("message", "rate limited"))
                 continue
             if code != 0:
+                log.error("扶摇错误 code=%s msg=%s path=%s", code, data.get("message", "unknown error"), path)
                 raise FuyaoError(code, data.get("message", "unknown error"))
+            log.debug("扶摇请求 path=%s", path)
             return data.get("data") or {}
+        log.error("扶摇请求失败(重试%d次) path=%s: %s", self.max_retries, path, last_err)
         raise last_err if last_err else FuyaoError(-1, "unreachable")
 
     @staticmethod

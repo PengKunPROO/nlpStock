@@ -10,7 +10,10 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
+from .logging_setup import get_logger
 from .schema import REFERENCE_STRATEGY, StrategyConfig
+
+log = get_logger("llm")
 
 MAX_ROUNDS = 4
 
@@ -98,14 +101,19 @@ def extract_json(content: str) -> dict:
         if text.lower().startswith("json"):
             text = text[4:]
         text = text.strip()
+    parsed = None
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except json.JSONDecodeError:
-        pass
-    start, end = text.find("{"), text.rfind("}")
-    if start >= 0 and end > start:
-        return json.loads(text[start : end + 1])
-    raise LLMParseError("模型输出不是有效 JSON", raw=content[:500])
+        start, end = text.find("{"), text.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                parsed = json.loads(text[start : end + 1])
+            except json.JSONDecodeError as e:
+                raise LLMParseError("模型输出不是有效 JSON", raw=content[:500]) from e
+    if not isinstance(parsed, dict):
+        raise LLMParseError("模型输出不是 JSON 对象", raw=content[:500])
+    return parsed
 
 
 class DeepSeekAligner:
@@ -131,6 +139,7 @@ class DeepSeekAligner:
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             timeout=timeout,
             verify=make_ssl_context(),
+            trust_env=False,
             transport=transport,
         )
 
@@ -149,6 +158,7 @@ class DeepSeekAligner:
         last_err: Exception | None = None
         for attempt in range(self.network_retries + 1):
             if attempt:
+                log.warning("LLM 网络重试 %d/%d", attempt, self.network_retries)
                 time.sleep(delay + random.uniform(0, 0.4))
                 delay *= 3
             try:
@@ -161,11 +171,16 @@ class DeepSeekAligner:
                 continue
             if resp.status_code != 200:
                 raise LLMParseError(f"LLM HTTP {resp.status_code}: {resp.text[:300]}")
-            data = resp.json()
             try:
-                return data["choices"][0]["message"]["content"] or ""
-            except (KeyError, IndexError) as e:
+                data = resp.json()
+            except ValueError as e:
+                raise LLMParseError(f"LLM 响应体非 JSON: {resp.text[:200]}") from e
+            try:
+                content = data["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError) as e:
                 raise LLMParseError(f"LLM 响应结构异常: {json.dumps(data, ensure_ascii=False)[:300]}") from e
+            return content or ""
+        log.error("LLM 网络错误(重试%d次): %s", self.network_retries, last_err)
         raise LLMParseError(f"LLM 网络错误: {last_err}")
 
     @staticmethod
@@ -202,6 +217,7 @@ class DeepSeekAligner:
                     convo.append({"role": "assistant", "content": content[:2000]})
                     convo.append({"role": "user", "content": FORCE_CONFIG_MSG + " 请直接输出配置。"})
                     continue
+                log.info("LLM 追问 round=%d", round_no)
                 return {
                     "type": "clarify",
                     "understanding": str(parsed.get("understanding") or ""),
@@ -212,12 +228,14 @@ class DeepSeekAligner:
                 try:
                     cfg = self._build_config(parsed.get("config"), messages)
                 except ValidationError as e:
+                    log.warning("配置校验失败回炉: %s", e.errors()[:3])
                     convo.append({"role": "assistant", "content": content[:2000]})
                     convo.append({
                         "role": "user",
                         "content": f"配置校验失败：{e.errors()[:5]}。请修正后重新输出完整 config。",
                     })
                     continue
+                log.info("LLM 产出配置 round=%d", round_no)
                 return {
                     "type": "config",
                     "config": cfg,

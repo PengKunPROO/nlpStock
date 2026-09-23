@@ -174,6 +174,18 @@ def test_parse_strategy_bad_messages(client_fake_data):
     assert r.status_code == 422  # pydantic min_length
 
 
+def test_parse_strategy_llm_parse_failed_returns_400(client_fake_data, monkeypatch):
+    from backend.llm_align import LLMParseError
+
+    def bad_align(self, messages):
+        raise LLMParseError("LLM 响应体非 JSON", raw="garbage")
+
+    monkeypatch.setattr(FakeAligner, "align", bad_align)
+    r = client_fake_data.post("/api/parse-strategy", json={"messages": [{"role": "user", "content": "x"}]})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "llm_parse_failed"
+
+
 def test_strategy_crud_flow(client_fake_data):
     c = client_fake_data
     import copy

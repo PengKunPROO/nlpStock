@@ -260,3 +260,41 @@ def test_chat_exhausts_network_retries():
     a = make_aligner(handler, retry_delay=0.001, network_retries=1)
     with pytest.raises(LLMParseError, match="网络错误"):
         a.align(USER_MSG)
+
+
+def test_deepseek_client_trust_env_false(monkeypatch):
+    real = httpx.Client
+    captured = {}
+
+    def fake(*args, **kwargs):
+        captured.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("backend.llm_align.httpx.Client", fake)
+    a = DeepSeekAligner("https://api.deepseek.com", "sk-test")
+    a.close()
+    assert captured.get("trust_env") is False
+
+
+def test_extract_json_non_object_and_malformed_raise_llm_parse_error():
+    for s in ["[1,2,3]", '"just a string"', '{"a":1} {"b":2}']:
+        with pytest.raises(LLMParseError):
+            extract_json(s)
+
+
+def test_chat_malformed_body_raises_llm_parse_error():
+    def handler(request):
+        return httpx.Response(200, content=b"not json at all")
+
+    a = make_aligner(handler, retry_delay=0.001)
+    with pytest.raises(LLMParseError, match="响应体非 JSON"):
+        a.align(USER_MSG)
+
+
+def test_chat_unexpected_shape_raises_llm_parse_error():
+    def handler(request):
+        return httpx.Response(200, json={"choices": [{"message": None}]})
+
+    a = make_aligner(handler, retry_delay=0.001)
+    with pytest.raises(LLMParseError, match="结构异常"):
+        a.align(USER_MSG)

@@ -6,19 +6,24 @@ from __future__ import annotations
 
 import argparse
 import os
+import uuid
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api import Core, register_routes
+from .logging_setup import get_logger, set_request_id, setup_logging
 from .storage import Storage
 
 VERSION = "1.0.0"
+log = get_logger("app")
 
 
 def create_app(db_path: str | Path = "data/app.db", static_dir: str | Path | None = None, core=None) -> FastAPI:
+    setup_logging()
     app = FastAPI(title="NLP策略选股器", version=VERSION)
     app.add_middleware(
         CORSMiddleware,
@@ -26,6 +31,22 @@ def create_app(db_path: str | Path = "data/app.db", static_dir: str | Path | Non
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def _request_id_middleware(request: Request, call_next):
+        set_request_id(uuid.uuid4().hex[:8])
+        return await call_next(request)
+
+    @app.exception_handler(Exception)
+    async def _unhandled_exception_handler(request: Request, exc: Exception):
+        log.error(
+            "未捕获异常 %s %s",
+            request.method,
+            request.url.path,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        return JSONResponse(status_code=500, content={"error": {"code": "internal", "message": "服务器内部错误，详见日志"}})
+
     storage = Storage(db_path)
     s = storage.get_settings()
     defaults = {

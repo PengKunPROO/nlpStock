@@ -114,6 +114,20 @@ def test_last_completed_trading_day_cutoffs():
     assert last_completed_trading_day(morning, []) is None
 
 
+def test_fuyao_client_trust_env_false(monkeypatch):
+    real = httpx.Client
+    captured = {}
+
+    def fake(*args, **kwargs):
+        captured.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("backend.fuyao.httpx.Client", fake)
+    c = FuyaoClient("sk-test")
+    c.close()
+    assert captured.get("trust_env") is False
+
+
 # ---------- DataService with FakeClient ----------
 
 
@@ -167,13 +181,19 @@ def svc(tmp_path):
     return DataService(client, storage), client, storage
 
 
+def _completed_day(client):
+    from backend.fuyao import last_completed_trading_day, now_cst
+
+    return last_completed_trading_day(now_cst(), client.trading)
+
+
 def test_get_bars_empty_cache_full_fetch(svc):
     ds, client, storage = svc
     bars = ds.get_bars("600519.SH", "stock", count=10)
     assert len(bars) >= 10
     assert len(client.fetches) == 1
     code, start, end = client.fetches[0]
-    assert code == "600519.SH" and end == client.today_ms
+    assert code == "600519.SH" and end == _completed_day(client)
     assert start <= client.today_ms - 30 * DAY_MS
     cached = storage.get_klines("600519.SH")
     assert len(cached) >= 10
@@ -185,7 +205,7 @@ def test_get_bars_fresh_cache_no_fetch(svc):
     n = len(client.fetches)
     bars2 = ds.get_bars("600519.SH", "stock", count=10)
     assert len(client.fetches) == n  # no additional fetch
-    assert bars2[-1]["date_ms"] == client.today_ms
+    assert bars2[-1]["date_ms"] == _completed_day(client)
 
 
 def test_get_bars_stale_tail_incremental(svc):
@@ -198,7 +218,7 @@ def test_get_bars_stale_tail_incremental(svc):
     ds.get_bars("600519.SH", "stock", count=10)
     assert len(client.fetches) == 1
     _, start, end = client.fetches[0]
-    assert end == client.today_ms
+    assert end == _completed_day(client)
     assert start <= client.today_ms - 11 * DAY_MS - 5 * DAY_MS + 1000  # incremental from ~have_last-5d
 
 

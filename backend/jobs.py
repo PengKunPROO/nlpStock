@@ -5,6 +5,10 @@ import threading
 import time
 import uuid
 
+from .logging_setup import get_logger
+
+log = get_logger("jobs")
+
 
 class JobRunner:
     def __init__(self, storage):
@@ -13,6 +17,7 @@ class JobRunner:
     def submit(self, job_type: str, fn) -> str:
         job_id = "j_" + uuid.uuid4().hex[:12]
         self.storage.create_job(job_id, job_type)
+        log.info("任务开始 job=%s type=%s", job_id, job_type)
         state = {"last_write": 0.0, "last_done": -1}
 
         def progress_cb(done: int, total: int, current: str) -> None:
@@ -26,8 +31,10 @@ class JobRunner:
             try:
                 result = fn(progress_cb)
                 self.storage.update_job(job_id, status="done", result=result)
+                log.info("任务完成 job=%s", job_id)
             except Exception as e:  # noqa: BLE001 - job boundary
                 self.storage.update_job(job_id, status="error", error=str(e)[:500])
+                log.exception("任务失败 job=%s", job_id)
 
         threading.Thread(target=wrapper, daemon=True, name=f"job-{job_id}").start()
         return job_id
