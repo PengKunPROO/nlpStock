@@ -1,0 +1,9 @@
+{
+  "appId": "com.strategystock.app",
+  "appName": "策略选股",
+  "webDir": "../../frontend",
+  "server": {
+    "androidScheme": "http",
+    "hostname": "localhost"
+  }
+}

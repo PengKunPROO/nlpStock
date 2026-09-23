@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# 密钥与运行时数据（含本地数据库，内含已配置的 API Key）
+.env
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# 工具缓存与内部状态
+.codegraph/
+.omo/
+.playwright-mcp/
+.node_modules/
+
+# 前端 QA 截图（可再生成）
+frontend/dev/qa/
+
+# Capacitor 构建产物
+deploy/apk/node_modules/
+deploy/apk/android/
+
+# 操作系统
+.DS_Store
+Thumbs.db
