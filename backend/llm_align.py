@@ -32,7 +32,20 @@ _INDICATOR_CATALOG = """可用指标 kind 目录（indicators 数组元素）：
 - {"id":"ush","kind":"UPPER_SHADOW_RATIO"}          上影线比例 (high-max(open,close))/(high-low)，∈[0,1]
 - {"id":"conv","kind":"MA_CONVERGE","mas":["ma5","ma10","ma20"]}  均线粘合度% =(max-min)/close*100（mas引用已声明的MA指标id）
 - {"id":"box20","kind":"BOX_TOP","n":20}            前箱体上沿 = 前n根K线最高价（不含当日）
-指标 id 规则：小写snake_case，≤20字符，全局唯一。"""
+- {"id":"ema12","kind":"EMA","of":"close","n":12}   指数均线（MACD基础），α=2/(n+1)
+- {"id":"dif","kind":"MACD_DIF","of":"close","fast":12,"slow":26,"signal":9}  MACD快线 = EMA(fast)-EMA(slow)，参数可选默认12/26/9
+- {"id":"dea","kind":"MACD_DEA","of":"close","fast":12,"slow":26,"signal":9}  MACD慢线 = EMA(DIF,signal)
+- {"id":"hist","kind":"MACD_HIST","of":"close","fast":12,"slow":26,"signal":9} MACD柱 = 2×(DIF-DEA)（A股口径）
+- {"id":"kdjk","kind":"KDJ_K","n":9,"m1":3,"m2":3}  KDJ的K线（通达信口径，参数可选默认9/3/3）
+- {"id":"kdjd","kind":"KDJ_D","n":9,"m1":3,"m2":3}  KDJ的D线
+- {"id":"kdjj","kind":"KDJ_J","n":9,"m1":3,"m2":3}  KDJ的J线 = 3K-2D（可超0~100，>100超买/<0超卖）
+- {"id":"rsi6","kind":"RSI","of":"close","n":6}     RSI（Wilder平滑，A股常用6/12/24，>70超买/<30超卖）
+- {"id":"boll_up","kind":"BOLL_UP","of":"close","n":20,"k":2.0}    布林上轨 = MID+k×STD（参数可选默认20/2）
+- {"id":"boll_mid","kind":"BOLL_MID","of":"close","n":20,"k":2.0}  布林中轨 = MA(n)
+- {"id":"boll_low","kind":"BOLL_LOW","of":"close","n":20,"k":2.0}  布林下轨 = MID-k×STD
+指标 id 规则：小写snake_case，≤20字符，全局唯一。MACD/KDJ/BOLL 多条线需分别声明（参数保持一致）。
+交叉（金叉/死叉）表达法——用 lag 取昨日值组合，例如 MACD 金叉（DIF今日在DEA上方且昨日不高于）：
+{"logic":"all","conditions":[{"left":"dif","op":">","right":"dea"},{"left":"dif","op":"<=","right":"dea","lag":1,"right_lag":1}]}"""
 
 _CONDITION_MODEL = """条件模型（entry/exit 的 conditions 数组元素）：
 叶子条件：{"left":"close","op":">","right":"ma20","right_factor":0.98,"lag":0,"right_lag":0,"within":15,"note":"原文依据"}

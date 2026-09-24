@@ -196,6 +196,13 @@ def test_base_url_normalization():
     a.close(); b.close()
 
 
+def test_system_prompt_includes_new_indicator_kinds():
+    from backend.llm_align import SYSTEM_PROMPT
+
+    for kw in ("EMA", "MACD_DIF", "MACD_DEA", "MACD_HIST", "KDJ_K", "KDJ_D", "KDJ_J", "RSI", "BOLL_UP", "BOLL_MID", "BOLL_LOW"):
+        assert kw in SYSTEM_PROMPT, f"指标目录缺少 {kw}"
+
+
 def test_ssl_context_forces_tls12():
     import ssl
 

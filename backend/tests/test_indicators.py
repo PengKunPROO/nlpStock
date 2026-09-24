@@ -168,3 +168,146 @@ def test_full_reference_strategy_pipeline_on_synthetic_bars():
     for i in range(0, len(bars), 7):
         signal_at(entry, series, i)
         signal_at(exit_, series, i)
+
+
+# ---------- 新技术指标（EMA / MACD / KDJ / RSI / BOLL，A 股口径） ----------
+
+
+def closes_bars(closes):
+    return make_bars([(c, c + 0.1, c - 0.1, c, 100.0) for c in closes])
+
+
+def test_ema_hand_computed():
+    specs = [IndicatorSpec(id="e", kind="EMA", of="close", n=3)]
+    s = compute_indicators(closes_bars([10, 11, 12, 13, 14]), specs)
+    assert s["e"][0] is None and s["e"][1] is None
+    assert approx(s["e"][2], 11.0)  # 种子 = SMA(3)
+    assert approx(s["e"][3], 12.0)  # α=0.5: 0.5*13 + 0.5*11
+    assert approx(s["e"][4], 13.0)
+
+
+def test_macd_hand_computed():
+    bars = closes_bars([10, 11, 12, 14])
+    common = dict(of="close", fast=2, slow=3, signal=2)
+    specs = [
+        IndicatorSpec(id="dif", kind="MACD_DIF", **common),
+        IndicatorSpec(id="dea", kind="MACD_DEA", **common),
+        IndicatorSpec(id="hist", kind="MACD_HIST", **common),
+    ]
+    s = compute_indicators(bars, specs)
+    assert s["dif"][0] is None and s["dif"][1] is None
+    assert approx(s["dif"][2], 0.5)  # EMA2=11.5 - EMA3=11
+    assert approx(s["dif"][3], 2 / 3)  # 79/6 - 25/2
+    assert s["dea"][2] is None
+    assert approx(s["dea"][3], 7 / 12)  # (0.5 + 2/3) / 2
+    assert s["hist"][2] is None
+    assert approx(s["hist"][3], 1 / 6)  # 2 * (2/3 - 7/12)
+
+
+def test_macd_hist_is_a_share_convention():
+    bars = closes_bars([10, 11, 12, 14, 15, 13, 12, 14, 16, 18])
+    common = dict(fast=3, slow=6, signal=3)
+    specs = [
+        IndicatorSpec(id="dif", kind="MACD_DIF", **common),
+        IndicatorSpec(id="dea", kind="MACD_DEA", **common),
+        IndicatorSpec(id="hist", kind="MACD_HIST", **common),
+    ]
+    s = compute_indicators(bars, specs)
+    checked = 0
+    for i in range(len(bars)):
+        if s["dif"][i] is not None and s["dea"][i] is not None:
+            assert approx(s["hist"][i], 2 * (s["dif"][i] - s["dea"][i]))
+            checked += 1
+    assert checked > 0
+
+
+def test_macd_default_params():
+    closes = [10 + 0.5 * i for i in range(40)]
+    a = compute_indicators(closes_bars(closes), [IndicatorSpec(id="d1", kind="MACD_DIF")])
+    b = compute_indicators(closes_bars(closes), [IndicatorSpec(id="d2", kind="MACD_DIF", of="close", fast=12, slow=26, signal=9)])
+    assert a["d1"] == b["d2"]
+    assert a["d1"][24] is None and a["d1"][25] is not None  # slow-1=25 起有值
+
+
+def test_kdj_hand_computed():
+    rows = [(10, 12, 9, 11, 100), (11, 13, 10, 12, 100), (12, 14, 11, 13, 100), (13, 15, 12, 14, 100)]
+    specs = [
+        IndicatorSpec(id="kdjk", kind="KDJ_K", n=3, m1=3, m2=3),
+        IndicatorSpec(id="kdjd", kind="KDJ_D", n=3, m1=3, m2=3),
+        IndicatorSpec(id="kdjj", kind="KDJ_J", n=3, m1=3, m2=3),
+    ]
+    s = compute_indicators(make_bars(rows), specs)
+    assert s["kdjk"][0] is None and s["kdjk"][1] is None
+    assert approx(s["kdjk"][2], 60.0)  # K=(80+2*50)/3
+    assert approx(s["kdjd"][2], 160 / 3)
+    assert approx(s["kdjj"][2], 220 / 3)
+    assert approx(s["kdjk"][3], 200 / 3)  # K=(80+2*60)/3
+    assert approx(s["kdjd"][3], 520 / 9)
+    assert approx(s["kdjj"][3], 760 / 9)
+
+
+def test_kdj_flat_window_rsv_50():
+    # HH==LL（无波动）→ RSV=50 → K=D=50, J=50
+    rows = [(10, 10, 10, 10, 100)] * 3
+    specs = [IndicatorSpec(id="kdjk", kind="KDJ_K", n=3)]
+    s = compute_indicators(make_bars(rows), specs)
+    assert approx(s["kdjk"][2], 50.0)
+
+
+def test_kdj_default_params():
+    rows = [(10 + i, 11 + i, 9 + i, 10 + i, 100) for i in range(12)]
+    a = compute_indicators(make_bars(rows), [IndicatorSpec(id="k1", kind="KDJ_K")])
+    b = compute_indicators(make_bars(rows), [IndicatorSpec(id="k2", kind="KDJ_K", n=9, m1=3, m2=3)])
+    assert a["k1"] == b["k2"]
+    assert a["k1"][7] is None and a["k1"][8] is not None  # n-1=8 起有值
+
+
+def test_rsi_hand_computed():
+    specs = [IndicatorSpec(id="r", kind="RSI", of="close", n=2)]
+    s = compute_indicators(closes_bars([10, 11, 10, 12, 13]), specs)
+    assert s["r"][0] is None and s["r"][1] is None
+    assert approx(s["r"][2], 50.0)  # 种子 gain=loss=0.5
+    assert approx(s["r"][3], 250 / 3)  # 1.25/1.5*100
+    assert approx(s["r"][4], 90.0)  # 1.125/1.25*100
+
+
+def test_rsi_default_n_is_6():
+    closes = [10 + (i % 5) for i in range(15)]
+    a = compute_indicators(closes_bars(closes), [IndicatorSpec(id="r1", kind="RSI")])
+    b = compute_indicators(closes_bars(closes), [IndicatorSpec(id="r2", kind="RSI", of="close", n=6)])
+    assert a["r1"] == b["r2"]
+
+
+def test_boll_hand_computed():
+    common = dict(of="close", n=3, k=2.0)
+    specs = [
+        IndicatorSpec(id="bu", kind="BOLL_UP", **common),
+        IndicatorSpec(id="bm", kind="BOLL_MID", **common),
+        IndicatorSpec(id="bl", kind="BOLL_LOW", **common),
+    ]
+    s = compute_indicators(closes_bars([10, 11, 12, 13]), specs)
+    assert s["bm"][0] is None and s["bm"][1] is None
+    assert approx(s["bm"][2], 11.0) and approx(s["bu"][2], 13.0) and approx(s["bl"][2], 9.0)
+    assert approx(s["bm"][3], 12.0) and approx(s["bu"][3], 14.0) and approx(s["bl"][3], 10.0)
+
+
+def test_boll_default_params():
+    closes = [10 + 0.3 * i for i in range(25)]
+    a = compute_indicators(closes_bars(closes), [IndicatorSpec(id="u1", kind="BOLL_UP")])
+    b = compute_indicators(closes_bars(closes), [IndicatorSpec(id="u2", kind="BOLL_UP", of="close", n=20, k=2.0)])
+    assert a["u1"] == b["u2"]
+
+
+def test_macd_golden_cross_condition_evaluates():
+    # 金叉 = 今日 DIF>DEA 且 昨日 DIF<=DEA（lag 语义现有引擎已支持）
+    series = {
+        "dif": [-1.0, -0.5, -0.2, 0.1, 0.3, 0.5],
+        "dea": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    }
+    cross = ConditionGroup.model_validate({"logic": "all", "conditions": [
+        {"left": "dif", "op": ">", "right": "dea"},
+        {"left": "dif", "op": "<=", "right": "dea", "lag": 1, "right_lag": 1},
+    ]})
+    assert signal_at(cross, series, 3) is True  # 0.1>0 且 昨日 -0.2<=0
+    assert signal_at(cross, series, 4) is False  # 昨日已金叉，非新交叉
+    assert signal_at(cross, series, 2) is False  # 今日都不满足

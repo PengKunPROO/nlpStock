@@ -2,7 +2,7 @@
 import pytest
 from pydantic import ValidationError
 
-from backend.schema import REFERENCE_STRATEGY, StrategyConfig
+from backend.schema import REFERENCE_STRATEGY, IndicatorSpec, StrategyConfig
 
 
 def test_reference_strategy_is_valid():
@@ -124,3 +124,77 @@ def test_numeric_right_and_string_right():
     data2 = _mutate(**{"entry.conditions.0.right": "chg5"})
     cfg2 = StrategyConfig.model_validate(data2)
     assert cfg2.entry.conditions[0].right == "chg5"
+
+
+# ---------- 新技术指标 kind 校验（EMA/MACD/KDJ/RSI/BOLL） ----------
+
+
+def test_new_indicator_kinds_valid():
+    ok = [
+        {"id": "ema12", "kind": "EMA", "of": "close", "n": 12},
+        {"id": "dif", "kind": "MACD_DIF", "of": "close", "fast": 12, "slow": 26, "signal": 9},
+        {"id": "dea", "kind": "MACD_DEA"},  # 全默认
+        {"id": "hist", "kind": "MACD_HIST", "fast": 6, "slow": 13, "signal": 5},
+        {"id": "kdjk", "kind": "KDJ_K", "n": 9, "m1": 3, "m2": 3},
+        {"id": "kdjd", "kind": "KDJ_D"},
+        {"id": "kdjj", "kind": "KDJ_J", "n": 5},
+        {"id": "rsi6", "kind": "RSI", "of": "close", "n": 6},
+        {"id": "rsi14", "kind": "RSI", "n": 14},
+        {"id": "boll_up", "kind": "BOLL_UP", "of": "close", "n": 20, "k": 2.0},
+        {"id": "boll_mid", "kind": "BOLL_MID"},
+        {"id": "boll_low", "kind": "BOLL_LOW", "n": 26, "k": 2.5},
+    ]
+    for spec in ok:
+        IndicatorSpec.model_validate(spec)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"id": "e1", "kind": "EMA", "n": 5},  # 缺 of
+        {"id": "e2", "kind": "EMA", "of": "close"},  # 缺 n
+        {"id": "e3", "kind": "EMA", "of": "vwap", "n": 5},  # of 非法
+        {"id": "e4", "kind": "MACD_DIF", "of": "vwap"},  # of 非法
+        {"id": "e5", "kind": "MACD_DIF", "fast": 1},  # fast 越界
+        {"id": "e6", "kind": "MACD_DEA", "signal": 251},
+        {"id": "e7", "kind": "KDJ_K", "m1": 1},
+        {"id": "e8", "kind": "KDJ_J", "m2": 0},
+        {"id": "e9", "kind": "RSI", "n": 1},
+        {"id": "e10", "kind": "RSI", "of": "vwap"},
+        {"id": "e11", "kind": "BOLL_UP", "k": 0},  # k<=0
+        {"id": "e12", "kind": "BOLL_MID", "n": 251},
+        {"id": "e13", "kind": "BOLL_LOW", "of": "vwap"},
+    ],
+)
+def test_new_indicator_kinds_rejected(spec):
+    with pytest.raises(ValidationError):
+        IndicatorSpec.model_validate(spec)
+
+
+def test_macd_cross_strategy_config_validates():
+    cfg = StrategyConfig.model_validate({
+        "name": "MACD金叉",
+        "universe": {"type": "custom", "codes": ["600519.SH"]},
+        "indicators": [
+            {"id": "dif", "kind": "MACD_DIF", "of": "close", "fast": 12, "slow": 26, "signal": 9},
+            {"id": "dea", "kind": "MACD_DEA", "of": "close", "fast": 12, "slow": 26, "signal": 9},
+            {"id": "kdjk", "kind": "KDJ_K", "n": 9, "m1": 3, "m2": 3},
+            {"id": "kdjd", "kind": "KDJ_D", "n": 9, "m1": 3, "m2": 3},
+        ],
+        "entry": {"logic": "all", "conditions": [
+            {"logic": "all", "conditions": [
+                {"left": "dif", "op": ">", "right": "dea"},
+                {"left": "dif", "op": "<=", "right": "dea", "lag": 1, "right_lag": 1},
+            ], "note": "DIF上穿DEA金叉"},
+            {"left": "kdjk", "op": ">", "right": "kdjd", "note": "K在D上方"},
+        ]},
+        "exit": {"logic": "any", "conditions": [
+            {"left": "dif", "op": "<", "right": "dea"},
+        ]},
+        "risk": {"stop_loss_pct": 8.0, "max_hold_days": 30, "take_profit_pct": None},
+        "backtest_defaults": {
+            "start": "2025-01-01", "end": "2026-09-18", "initial_cash": 1000000,
+            "position_pct": 20, "max_positions": 5, "fee_bps": 2.5, "stamp_tax_bps": 5.0,
+        },
+    })
+    assert len(cfg.indicators) == 4

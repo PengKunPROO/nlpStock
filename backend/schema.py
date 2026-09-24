@@ -21,10 +21,20 @@ def _valid_date(v: str) -> str:
 
 class IndicatorSpec(BaseModel):
     id: str
-    kind: Literal["MA", "PCT_CHANGE", "VRATIO", "BODY_RATIO", "UPPER_SHADOW_RATIO", "MA_CONVERGE", "BOX_TOP"]
+    kind: Literal[
+        "MA", "PCT_CHANGE", "VRATIO", "BODY_RATIO", "UPPER_SHADOW_RATIO", "MA_CONVERGE", "BOX_TOP",
+        "EMA", "MACD_DIF", "MACD_DEA", "MACD_HIST", "KDJ_K", "KDJ_D", "KDJ_J", "RSI",
+        "BOLL_UP", "BOLL_MID", "BOLL_LOW",
+    ]
     of: Union[str, None] = None
     n: Union[int, None] = None
     mas: Union[list[str], None] = None
+    fast: Union[int, None] = None
+    slow: Union[int, None] = None
+    signal: Union[int, None] = None
+    m1: Union[int, None] = None
+    m2: Union[int, None] = None
+    k: Union[float, None] = None
 
     @field_validator("id")
     @classmethod
@@ -32,6 +42,16 @@ class IndicatorSpec(BaseModel):
         if not _ID_RE.match(v):
             raise ValueError("indicator id must be lowercase snake_case (max 20 chars)")
         return v
+
+    def _check_int_range(self, names: tuple[str, ...]) -> None:
+        for name in names:
+            v = getattr(self, name)
+            if v is not None and not (2 <= v <= 250):
+                raise ValueError(f"{name} must be in [2, 250]")
+
+    def _check_of_optional(self) -> None:
+        if self.of is not None and self.of not in BASE_FIELDS:
+            raise ValueError(f"of must be one of {sorted(BASE_FIELDS)}")
 
     @model_validator(mode="after")
     def _check_params(self) -> "IndicatorSpec":
@@ -49,6 +69,24 @@ class IndicatorSpec(BaseModel):
         elif self.kind == "MA_CONVERGE":
             if not self.mas or len(self.mas) < 2:
                 raise ValueError("MA_CONVERGE requires mas with >= 2 entries")
+        elif self.kind == "EMA":
+            if self.of not in BASE_FIELDS:
+                raise ValueError(f"EMA requires of in {sorted(BASE_FIELDS)}")
+            if self.n is None or not (2 <= self.n <= 250):
+                raise ValueError("EMA requires n in [2, 250]")
+        elif self.kind in ("MACD_DIF", "MACD_DEA", "MACD_HIST"):
+            self._check_of_optional()
+            self._check_int_range(("fast", "slow", "signal"))
+        elif self.kind in ("KDJ_K", "KDJ_D", "KDJ_J"):
+            self._check_int_range(("n", "m1", "m2"))
+        elif self.kind == "RSI":
+            self._check_of_optional()
+            self._check_int_range(("n",))
+        elif self.kind in ("BOLL_UP", "BOLL_MID", "BOLL_LOW"):
+            self._check_of_optional()
+            self._check_int_range(("n",))
+            if self.k is not None and self.k <= 0:
+                raise ValueError("k must be > 0")
         return self
 
 

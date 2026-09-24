@@ -323,32 +323,69 @@ function universeCard(cfg) {
 }
 
 const FIELD_OPTS = ['open', 'high', 'low', 'close', 'volume'];
-const KIND_OPTS = ['MA', 'PCT_CHANGE', 'VRATIO', 'BODY_RATIO', 'UPPER_SHADOW_RATIO', 'MA_CONVERGE', 'BOX_TOP'];
+const KIND_OPTS = ['MA', 'PCT_CHANGE', 'VRATIO', 'BODY_RATIO', 'UPPER_SHADOW_RATIO', 'MA_CONVERGE', 'BOX_TOP',
+  'EMA', 'MACD_DIF', 'MACD_DEA', 'MACD_HIST', 'KDJ_K', 'KDJ_D', 'KDJ_J', 'RSI', 'BOLL_UP', 'BOLL_MID', 'BOLL_LOW'];
+const KIND_PARAMS = {
+  MA: ['of', 'n'], PCT_CHANGE: ['of', 'n'], VRATIO: ['n'], BOX_TOP: ['n'],
+  BODY_RATIO: [], UPPER_SHADOW_RATIO: [], MA_CONVERGE: ['mas'],
+  EMA: ['of', 'n'], RSI: ['of', 'n'],
+  MACD_DIF: ['of', 'fast', 'slow', 'signal'], MACD_DEA: ['of', 'fast', 'slow', 'signal'], MACD_HIST: ['of', 'fast', 'slow', 'signal'],
+  KDJ_K: ['n', 'm1', 'm2'], KDJ_D: ['n', 'm1', 'm2'], KDJ_J: ['n', 'm1', 'm2'],
+  BOLL_UP: ['of', 'n', 'k'], BOLL_MID: ['of', 'n', 'k'], BOLL_LOW: ['of', 'n', 'k'],
+};
+const IND_PARAM_FIELDS = ['of', 'n', 'mas', 'fast', 'slow', 'signal', 'm1', 'm2', 'k'];
+
+function paramInput(ind, p) {
+  if (p === 'of') {
+    return `<select data-p="of">${FIELD_OPTS.map((f) => `<option ${f === (ind.of || 'close') ? 'selected' : ''}>${f}</option>`).join('')}</select>`;
+  }
+  if (p === 'mas') {
+    return `<input type="text" placeholder="mas,逗号分隔" value="${esc((ind.mas || []).join(','))}" data-p="mas" style="min-width:90px">`;
+  }
+  const v = ind[p];
+  if (p === 'k') {
+    return `<input type="number" step="0.5" placeholder="k倍数" value="${v ?? ''}" data-p="k" style="min-width:64px" title="标准差倍数，默认2">`;
+  }
+  return `<input type="number" placeholder="${p}" value="${v ?? ''}" data-p="${p}" style="min-width:52px">`;
+}
 
 function indRow(ind, cfg) {
-  const ids = ['open', 'high', 'low', 'close', 'volume', ...cfg.indicators.map((i) => i.id)];
   const row = h(`<div class="cond">
     <div class="parts">
       <input type="text" value="${esc(ind.id)}" style="min-width:70px" data-k="id" title="指标id">
       <select data-k="kind">${KIND_OPTS.map((k) => `<option ${k === ind.kind ? 'selected' : ''}>${k}</option>`).join('')}</select>
-      <select data-k="of">${FIELD_OPTS.map((f) => `<option ${f === ind.of ? 'selected' : ''}>${f}</option>`).join('')}</select>
-      <input type="number" placeholder="n" value="${ind.n ?? ''}" style="min-width:52px" data-k="n">
-      <input type="text" placeholder="mas,逗号分隔" value="${esc((ind.mas || []).join(','))}" style="min-width:90px" data-k="mas" ${ind.kind === 'MA_CONVERGE' ? '' : 'style="min-width:90px;display:none"'}>
+      <span class="params" style="display:flex;gap:6px;flex:1;flex-wrap:wrap;align-items:center"></span>
       <button class="del" title="删除">✕</button>
     </div>
   </div>`);
+  const paramsEl = row.querySelector('.params');
+  const renderParams = () => {
+    paramsEl.innerHTML = '';
+    for (const p of KIND_PARAMS[ind.kind] || []) {
+      paramsEl.appendChild(h(`<span>${paramInput(ind, p)}</span>`));
+    }
+  };
+  renderParams();
   row.querySelector('.del').onclick = () => {
     cfg.indicators = cfg.indicators.filter((i) => i !== ind);
     row.remove();
   };
-  row.querySelectorAll('[data-k]').forEach((el) => {
-    el.onchange = () => {
-      const k = el.dataset.k;
-      if (k === 'n') ind.n = el.value === '' ? null : Number(el.value);
-      else if (k === 'mas') ind.mas = el.value.split(/[,，\s]+/).filter(Boolean);
-      else ind[k] = el.value;
-      if (k === 'kind') { refreshReview(); }
-    };
+  row.querySelector('[data-k="id"]').onchange = (e) => { ind.id = e.target.value.trim() || ind.id; };
+  row.querySelector('[data-k="kind"]').onchange = (e) => {
+    ind.kind = e.target.value;
+    const keep = new Set(KIND_PARAMS[ind.kind] || []);
+    for (const p of IND_PARAM_FIELDS) {
+      if (!keep.has(p)) delete ind[p];
+    }
+    renderParams();
+  };
+  paramsEl.addEventListener('change', (e) => {
+    const p = e.target.dataset.p;
+    if (!p) return;
+    if (p === 'of') ind.of = e.target.value;
+    else if (p === 'mas') ind.mas = e.target.value.split(/[,，\s]+/).filter(Boolean);
+    else if (p === 'k') ind.k = e.target.value === '' ? null : Number(e.target.value);
+    else ind[p] = e.target.value === '' ? null : Number(e.target.value);
   });
   return row;
 }
