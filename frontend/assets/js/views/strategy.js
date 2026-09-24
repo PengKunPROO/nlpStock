@@ -9,6 +9,7 @@ let alignMessages = []; // 对齐对话历史（模块级，切tab保留）
 
 export async function renderStrategyView(view) {
   const sub = view.dataset.sub || 'list';
+  view.classList.toggle('chat-mode', sub === 'new');
   if (sub === 'list') await renderList(view);
   else if (sub === 'new') renderChat(view);
   else if (sub === 'review') renderReview(view);
@@ -83,8 +84,14 @@ function renderChat(view) {
 
   const appendBubble = (role, html) => {
     list.appendChild(h(`<div class="bubble ${role}">${html}</div>`));
-    list.scrollIntoView({ block: 'end' });
-    window.scrollTo(0, document.body.scrollHeight);
+    list.scrollTop = list.scrollHeight;
+  };
+
+  const showTyping = () => {
+    const el = h('<div class="typing"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>AI 正在思考</span></div>');
+    list.appendChild(el);
+    list.scrollTop = list.scrollHeight;
+    return el;
   };
 
   const renderHistory = () => {
@@ -106,12 +113,11 @@ function renderChat(view) {
     alignMessages.push({ role: 'user', content: text });
     appendBubble('me', esc(text));
     sendBtn.disabled = true;
-    let thinking;
+    let typing;
     try {
-      appendBubble('ai', '<span class="muted">思考中…</span>');
-      thinking = list.lastElementChild;
+      typing = showTyping();
       const resp = await api.parseStrategy(alignMessages.map(({ role, content }) => ({ role, content })));
-      if (thinking) thinking.remove();
+      if (typing) typing.remove();
       if (resp.type === 'clarify') {
         const qHtml = `<div class="q-title">当前量化理解</div>${esc(resp.understanding || '')}<div class="q-title" style="margin-top:8px">请确认 ${resp.round}/4</div><ol>${resp.questions.map((q) => `<li>${esc(q)}</li>`).join('')}</ol>`;
         alignMessages.push({ role: 'assistant', content: `${resp.understanding}\n${resp.questions.join('\n')}`, html: qHtml });
@@ -124,7 +130,7 @@ function renderChat(view) {
         setTimeout(() => go('review'), 700);
       }
     } catch (e) {
-      if (thinking) thinking.remove();
+      if (typing) typing.remove();
       if (e.code === 'llm_not_configured') {
         appendBubble('ai', `<span class="up">尚未配置 AI 解析（DeepSeek）API Key。</span><br>请到「设置」页填写后再来。`);
       } else {

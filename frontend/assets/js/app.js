@@ -61,6 +61,7 @@ async function render() {
   setActive();
   const tab = currentTab();
   const view = document.getElementById('view');
+  view.classList.remove('chat-mode');
   view.innerHTML = '<div class="spinner"></div>';
   try {
     await ensureSettings(api);

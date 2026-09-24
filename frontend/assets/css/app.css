@@ -44,7 +44,7 @@ html, body {
   font-size: 16px; line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
-#app { max-width: 520px; margin: 0 auto; min-height: 100vh; display: flex; flex-direction: column; position: relative; }
+#app { max-width: 520px; margin: 0 auto; height: 100vh; height: 100dvh; display: flex; flex-direction: column; position: relative; overflow: hidden; }
 
 .nav-header {
   position: sticky; top: 0; z-index: 20;
@@ -56,7 +56,7 @@ html, body {
 .nav-header h1 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -0.4px; }
 .nav-header .sub { font-size: 13px; color: var(--text-3); margin-top: 2px; }
 
-.view { flex: 1; padding: 16px 16px calc(var(--tab-h) + env(safe-area-inset-bottom, 0px) + 24px); }
+.view { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 16px calc(var(--tab-h) + env(safe-area-inset-bottom, 0px) + 24px); }
 
 .tabbar {
   position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
@@ -159,6 +159,16 @@ textarea { resize: vertical; min-height: 90px; line-height: 1.45; }
 .chat-input textarea { flex: 1; min-height: 44px; max-height: 120px; }
 .send-btn { width: 46px; height: 46px; border-radius: 50%; border: none; background: var(--accent); color: #fff; font-size: 19px; cursor: pointer; flex-shrink: 0; }
 .send-btn[disabled] { opacity: 0.4; }
+
+/* 聊天模式：微信式 —— 聊天区固定高度内部滚动，输入框常驻底部，页面不增长 */
+.view.chat-mode { display: flex; flex-direction: column; overflow: hidden; }
+.view.chat-mode .chat { flex: 1; min-height: 0; overflow-y: auto; }
+.view.chat-mode .card, .view.chat-mode .chat-input { flex-shrink: 0; }
+.typing { align-self: flex-start; display: flex; align-items: center; gap: 5px; color: var(--text-3); font-size: 13px; padding: 8px 4px; }
+.typing .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-3); animation: typing 1.2s infinite; }
+.typing .dot:nth-child(2) { animation-delay: 0.2s; }
+.typing .dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes typing { 0%, 60%, 100% { opacity: 0.25; } 30% { opacity: 1; } }
 
 /* sheet modal */
 .sheet-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 40; display: flex; align-items: flex-end; }
