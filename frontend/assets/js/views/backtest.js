@@ -2,7 +2,7 @@
 import { api, pollJob } from '../api.js';
 import state from '../store.js';
 import { renderEquity } from '../chart/equity.js';
-import { EXIT_LABEL, esc, fmtMoney, fmtPct, fmtPrice, h, pctClass, toast } from '../util.js';
+import { EXIT_LABEL, esc, fmtMoney, fmtPct, fmtPrice, h, paginate, pctClass, toast } from '../util.js';
 
 export async function renderBacktestView(view) {
   let strategies = [];
@@ -92,12 +92,29 @@ export async function renderBacktestView(view) {
   if (state.lastBacktestResult) renderReport(document.getElementById('bt-report'), state.lastBacktestResult);
 }
 
+function evHtml(ev) {
+  if (!ev) return '';
+  if (ev.trigger) {
+    return `<div class="ev-box"><div class="ev-row"><span class="ev-val">${esc(ev.trigger)}</span></div></div>`;
+  }
+  const rows = (ev.conditions || []).map((c) => {
+    const cls = c.passed ? 'ev-pass' : 'ev-fail';
+    const lv = c.left === null || c.left === undefined ? '—' : Number(c.left).toFixed(4);
+    const rv = c.right === null || c.right === undefined ? '—' : Number(c.right).toFixed(4);
+    return `<div class="ev-row"><span class="${cls}">${c.passed ? '✓' : '✗'}</span><code>${esc(c.expr)}</code><span class="ev-val">${lv} vs ${rv}</span>${c.note ? `<span class="muted">${esc(c.note)}</span>` : ''}</div>`;
+  }).join('');
+  const dateStr = ev.signal_date ? ` · 信号日 ${esc(ev.signal_date)}` : '';
+  return `<div class="ev-box">${rows}${dateStr ? `<div class="muted" style="margin-top:4px">${dateStr}</div>` : ''}</div>`;
+}
+
 function renderReport(el, result) {
   const m = result.metrics;
   const p = result.params;
+  const audit = result.audit || { daily: [] };
   const metric = (k, v, cls = '') => `<div class="metric"><div class="k">${k}</div><div class="v ${cls}">${v ?? '—'}</div></div>`;
   el.innerHTML = `
     <div class="card" style="padding:12px 16px">
+      <div style="font-size:14px;font-weight:600;margin-bottom:4px">${esc(p.strategy_name || '草稿策略')}${p.strategy_version ? '<span class="chip accent" style="margin-left:6px">v' + p.strategy_version + '</span>' : ''}</div>
       <div style="display:flex;justify-content:space-between;font-size:13px" class="muted">
         <span>${esc(p.start)} → ${esc(p.end)}</span>
         <span>${esc(p.universe_name || '')}${p.stock_count ? ' · ' + p.stock_count + '只' : ''}</span>
@@ -119,23 +136,12 @@ function renderReport(el, result) {
       <div class="muted" style="font-size:11px;margin-top:6px">期末净值 ${fmtMoney(m.final_equity)} · 红色区域为回撤（-30%满幅）· 触摸查看逐日数值</div>
     </div>
     <div class="card">
-      <h3>交易明细（${result.trades.length}）</h3>
-      <div style="overflow-x:auto">
-        <table class="trade-table">
-          <thead><tr><th>股票</th><th>买入</th><th>卖出</th><th>天数</th><th>盈亏%</th><th>原因</th></tr></thead>
-          <tbody>
-            ${result.trades.map((t) => `
-              <tr data-code="${esc(t.code)}">
-                <td><b>${esc(t.name)}</b><div class="muted" style="font-size:11px">${esc(t.code)}</div></td>
-                <td>${esc(t.entry_date)}<div class="muted" style="font-size:11px">@${fmtPrice(t.entry_price)}</div></td>
-                <td>${esc(t.exit_date)}<div class="muted" style="font-size:11px">@${fmtPrice(t.exit_price)}</div></td>
-                <td>${t.holding_days}</td>
-                <td class="${pctClass(t.pnl_pct)}">${fmtPct(t.pnl_pct)}<div class="muted" style="font-size:11px">${fmtMoney(t.pnl)}</div></td>
-                <td><span class="badge ${esc(t.exit_reason)}">${EXIT_LABEL[t.exit_reason] || esc(t.exit_reason)}</span></td>
-              </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>
+      <h3>交易明细（${result.trades.length}）<span class="muted" style="font-size:12px;font-weight:400"> · 点击行展开买卖依据</span></h3>
+      <div id="trades-paged"></div>
+    </div>
+    <div class="card">
+      <h3>过程审计（逐日流水）<span class="muted" style="font-size:12px;font-weight:400"> · ${audit.daily.length} 天</span></h3>
+      <div id="audit-paged"></div>
     </div>
     <div class="hint">回测口径：T日收盘出信号 → T+1开盘价成交；买入按当前权益×单仓%开仓；止损盘中触发按止损价成交（跳空按开盘价）；含佣金（${p.fee_bps}bp/边）与印花税（${p.stamp_tax_bps}bp/卖出）。期末持仓按最后收盘估值，不计入胜率。</div>
   `;
@@ -158,10 +164,70 @@ function renderReport(el, result) {
       tipEl.style.top = '26px';
     },
   });
-  el.querySelectorAll('tr[data-code]').forEach((tr) => {
-    tr.onclick = () => {
-      state.chartCode = tr.dataset.code;
-      location.hash = '#/chart';
-    };
-  });
+
+  // 交易明细分页 + 展开依据
+  const tradesDiv = document.getElementById('trades-paged');
+  paginate(tradesDiv, result.trades, (container, pageItems) => {
+    const tb = h(`<div style="overflow-x:auto"><table class="trade-table">
+      <thead><tr><th>股票</th><th>买入</th><th>卖出</th><th>天数</th><th>盈亏%</th><th>原因</th></tr></thead>
+      <tbody></tbody></table></div>`);
+    const tbody = tb.querySelector('tbody');
+    for (const t of pageItems) {
+      const tr = h(`<tr data-code="${esc(t.code)}">
+        <td><b>${esc(t.name)}</b><div class="muted" style="font-size:11px">${esc(t.code)}</div></td>
+        <td>${esc(t.entry_date)}<div class="muted" style="font-size:11px">@${fmtPrice(t.entry_price)}</div></td>
+        <td>${esc(t.exit_date)}<div class="muted" style="font-size:11px">@${fmtPrice(t.exit_price)}</div></td>
+        <td>${t.holding_days}</td>
+        <td class="${pctClass(t.pnl_pct)}">${fmtPct(t.pnl_pct)}<div class="muted" style="font-size:11px">${fmtMoney(t.pnl)}</div></td>
+        <td><span class="badge ${esc(t.exit_reason)}">${EXIT_LABEL[t.exit_reason] || esc(t.exit_reason)}</span></td>
+      </tr>`);
+      const detail = h(`<tr class="trade-detail" style="display:none"><td colspan="6" style="padding:0">
+        <div style="padding:4px 8px">
+          <div class="muted" style="font-size:11px;margin:4px 0">买入依据</div>${evHtml(t.entry_evidence)}
+          <div class="muted" style="font-size:11px;margin:4px 0">卖出依据</div>${evHtml(t.exit_evidence)}
+        </div></td></tr>`);
+      tr.onclick = () => {
+        const visible = detail.style.display !== 'none';
+        detail.style.display = visible ? 'none' : '';
+        if (!visible) tr.insertAdjacentElement('afterend', detail);
+        else detail.remove();
+      };
+      tbody.appendChild(tr);
+    }
+    container.appendChild(tb);
+  }, 20);
+
+  // 过程审计分页
+  const auditDiv = document.getElementById('audit-paged');
+  const actionDays = audit.daily.filter((d) => d.actions.length > 0);
+  paginate(auditDiv, actionDays.length > 0 ? actionDays : audit.daily.slice(-1), (container, pageItems) => {
+    for (const d of pageItems) {
+      const dayEl = h(`<div style="border-bottom:0.5px solid var(--sep);padding:10px 0">
+        <div style="display:flex;justify-content:space-between;font-size:13px">
+          <b>${esc(d.date)}</b>
+          <span class="mono muted">权益 ${fmtMoney(d.equity)} · 现金 ${fmtMoney(d.cash)}</span>
+        </div>
+      </div>`);
+      for (const a of d.actions) {
+        const actEl = h(`<div style="padding:6px 0 2px;font-size:13px">
+          <span class="badge ${a.action === 'buy' ? 'signal' : 'stop_loss'}">${a.action === 'buy' ? '买入' : '卖出'}</span>
+          <b style="margin:0 6px">${esc(a.name)}</b>
+          <span class="mono muted">${a.shares}股 @${fmtPrice(a.price)} · ${fmtMoney(a.amount)}</span>
+          <span class="badge ${esc(a.reason)}" style="margin-left:4px">${EXIT_LABEL[a.reason] || a.reason}</span>
+        </div>`);
+        if (a.evidence) {
+          const evEl = h(`<div>${evHtml(a.evidence)}</div>`);
+          actEl.appendChild(evEl);
+        }
+        dayEl.appendChild(actEl);
+      }
+      if (d.positions.length > 0) {
+        const posEl = h(`<div class="muted" style="font-size:12px;margin-top:4px">
+          持仓：${d.positions.map((p2) => `${esc(p2.name)} ${p2.shares}股@${fmtPrice(p2.cost)}(${fmtPct(p2.pnl_pct)})`).join(' · ')}
+        </div>`);
+        dayEl.appendChild(posEl);
+      }
+      container.appendChild(dayEl);
+    }
+  }, 10);
 }

@@ -215,6 +215,16 @@ canvas.kline, canvas.equity { width: 100%; display: block; touch-action: none; }
 .search-drop .s-item:active { background: var(--chip-bg); }
 
 /* misc */
+.pager { display: flex; gap: 6px; align-items: center; justify-content: center; padding: 14px 0 4px; flex-wrap: wrap; }
+.page-btn { min-width: 34px; height: 34px; border: 0.5px solid var(--sep); border-radius: 8px; background: var(--card); color: var(--text); font-size: 13px; font-family: inherit; cursor: pointer; padding: 0 8px; }
+.page-btn.disabled { opacity: 0.35; pointer-events: none; }
+.page-btn:not(.disabled):active { background: var(--chip-bg); }
+.page-info { color: var(--text-3); font-size: 12px; margin-left: 8px; }
+.ev-box { background: var(--card-2); border-radius: 10px; padding: 10px 12px; margin: 6px 0 12px; font-size: 12px; line-height: 1.8; }
+.ev-box .ev-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.ev-box .ev-val { font-variant-numeric: tabular-nums; color: var(--text-2); }
+.ev-pass { color: var(--down); font-weight: 600; }
+.ev-fail { color: var(--text-3); }
 .empty { text-align: center; padding: 48px 24px; color: var(--text-3); font-size: 15px; }
 .empty svg { width: 44px; height: 44px; opacity: 0.35; margin-bottom: 10px; }
 .spinner { width: 22px; height: 22px; border: 2.5px solid var(--chip-bg); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 30px auto; }

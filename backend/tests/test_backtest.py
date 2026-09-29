@@ -191,7 +191,6 @@ def test_max_positions_limit():
 
 
 def test_end_of_data_not_in_win_rate():
-    # rise forever with no exit signal and no risk rules → single end_of_data trade
     closes = [10.0] * 10 + [10.5 + i * 0.1 for i in range(10)]
     bars = bars_from_closes(closes, opens=list(closes))
     data = FakeData({"600001.SH": bars})
@@ -260,3 +259,73 @@ def test_reference_strategy_backtest_runs():
     end_ms = parse_as_of("2025-12-31") + 86_400_000 - 1
     in_window = [b for b in bars if parse_as_of("2025-01-01") <= b["date_ms"] <= end_ms]
     assert len(result["equity_curve"]) == len(in_window)
+
+
+# ---------- 审计追踪（audit trail） ----------
+
+
+def test_audit_daily_and_evidence_present():
+    # 用均线穿越策略产生确定性交易，验证 audit 结构
+    closes = [10.0] * 10 + [10.5, 11.0, 11.5, 12.0, 12.5, 11.0, 10.8, 10.6, 10.4]
+    bars = bars_from_closes(closes, opens=list(closes))
+    data = FakeData({"600001.SH": bars})
+    result = run(ma_cross_cfg(), data)
+
+    assert "audit" in result
+    daily = result["audit"]["daily"]
+    assert len(daily) > 0
+    # daily 与 equity_curve 逐日一致
+    assert len(daily) == len(result["equity_curve"])
+    for d, ec in zip(daily, result["equity_curve"]):
+        assert d["date"] == ec["date"]
+        assert d["equity"] == ec["value"]
+        assert isinstance(d["cash"], (int, float))
+        assert isinstance(d["positions"], list)
+
+    # 交易带 evidence
+    trades = result["trades"]
+    assert len(trades) >= 1
+    t = trades[0]
+    assert "entry_evidence" in t and t["entry_evidence"] is not None
+    ev = t["entry_evidence"]
+    assert "signal_date" in ev
+    assert len(ev["conditions"]) >= 1
+    c0 = ev["conditions"][0]
+    assert "expr" in c0 and "left" in c0 and "right" in c0 and "passed" in c0
+
+
+def test_audit_evidence_values_match_indicators():
+    # 验证 evidence 里的数值与指标实际值一致（close > ma5 场景）
+    closes = [10.0] * 10 + [10.5, 11.0, 11.5, 12.0, 12.5, 11.0, 10.8, 10.6, 10.4]
+    bars = bars_from_closes(closes, opens=list(closes))
+    data = FakeData({"600001.SH": bars})
+    result = run(ma_cross_cfg(), data)
+
+    t = result["trades"][0]
+    ev = t["entry_evidence"]
+    # 条件是 close > ma5；找到该条件并核对数值
+    cond = next(c for c in ev["conditions"] if "close" in c["expr"] and "ma5" in c["expr"])
+    assert cond["passed"] is True
+    # signal_date 当天的收盘价应 > ma5
+    assert cond["left"] > cond["right"]
+    # signal_date 应早于或等于 entry_date（T日信号 → T+1成交）
+    assert ev["signal_date"] <= t["entry_date"]
+
+
+def test_audit_daily_actions_recorded():
+    closes = [10.0] * 10 + [10.5, 11.0, 11.5, 12.0, 12.5, 11.0, 10.8, 10.6, 10.4]
+    bars = bars_from_closes(closes, opens=list(closes))
+    data = FakeData({"600001.SH": bars})
+    result = run(ma_cross_cfg(), data)
+
+    all_actions = [a for d in result["audit"]["daily"] for a in d["actions"]]
+    buy_actions = [a for a in all_actions if a["action"] == "buy"]
+    sell_actions = [a for a in all_actions if a["action"] == "sell"]
+    # 至少有一买一卖
+    assert len(buy_actions) >= 1 and len(sell_actions) >= 1
+    b = buy_actions[0]
+    assert b["code"] == "600001.SH" and b["shares"] > 0 and b["price"] > 0
+    assert "evidence" in b and b["evidence"] is not None
+    # 止损类动作带触发详情
+    for a in sell_actions:
+        assert a["reason"] in ("signal", "stop_loss", "max_hold", "take_profit", "end_of_data")

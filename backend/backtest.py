@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from .conditions import signal_at
+from .conditions import eval_group_verbose, signal_at
 from .data_service import DataService
 from .fuyao import CST
 from .indicators import compute_indicators
@@ -25,7 +25,7 @@ def _date_str(ms: int) -> str:
 
 
 class _Stock:
-    __slots__ = ("name", "dates", "date_idx", "open", "high", "low", "close", "entry_sig", "exit_sig", "last_close")
+    __slots__ = ("name", "dates", "date_idx", "open", "high", "low", "close", "entry_sig", "exit_sig", "last_close", "series", "entry_group", "exit_group")
 
     def __init__(self, name, bars, series, entry_group, exit_group):
         self.name = name
@@ -36,6 +36,9 @@ class _Stock:
         self.low = [b["low"] for b in bars]
         self.close = [b["close"] for b in bars]
         self.last_close = self.close[-1] if self.close else None
+        self.series = series
+        self.entry_group = entry_group
+        self.exit_group = exit_group
         self.entry_sig = [signal_at(entry_group, series, i) for i in range(len(bars))]
         self.exit_sig = [signal_at(exit_group, series, i) for i in range(len(bars))]
 
@@ -99,6 +102,7 @@ def backtest(
     positions: dict[str, dict] = {}
     trades: list[dict] = []
     equity_curve: list[dict] = []
+    audit_daily: list[dict] = []
     peak = initial_cash
     max_dd = 0.0
 
@@ -109,7 +113,7 @@ def backtest(
             total += p["shares"] * (s.last_close or p["entry_price"])
         return total
 
-    def sell(code: str, gidx: int, price: float, reason: str, date_ms: int) -> None:
+    def sell(code: str, gidx: int, price: float, reason: str, date_ms: int, exit_ev: dict | None = None) -> None:
         nonlocal cash
         p = positions.pop(code)
         gross = p["shares"] * price
@@ -130,9 +134,23 @@ def backtest(
             "pnl_pct": round(pnl / p["cost"] * 100, 4) if p["cost"] else 0.0,
             "holding_days": gidx - p["entry_gidx"],
             "exit_reason": reason,
+            "entry_evidence": p.get("entry_evidence"),
+            "exit_evidence": exit_ev,
+        })
+        day_actions.append({
+            "code": code,
+            "name": p["name"],
+            "action": "sell",
+            "price": round(price, 4),
+            "shares": p["shares"],
+            "amount": round(gross, 2),
+            "fee": round(fee + tax, 2),
+            "reason": reason,
+            "evidence": exit_ev,
         })
 
     for gidx, d in enumerate(sim_dates):
+        day_actions: list[dict] = []
         # ---- exit phase (open) ----
         for code in list(positions.keys()):
             p = positions[code]
@@ -145,21 +163,28 @@ def backtest(
             tp = p["tp_price"]
             reason = None
             price = None
+            exit_ev: dict | None = None
             if gidx > p["entry_gidx"]:
                 if stop is not None and op <= stop:
                     reason, price = "stop_loss", op
+                    exit_ev = {"trigger": f"开盘价 {op} ≤ 止损价 {stop}"}
                 elif tp is not None and op >= tp:
                     reason, price = "take_profit", op
+                    exit_ev = {"trigger": f"开盘价 {op} ≥ 止盈价 {tp}"}
                 elif i > 0 and s.exit_sig[i - 1]:
                     reason, price = "signal", op
+                    exit_ev = _signal_evidence(s, i - 1, cfg.exit, "离场信号")
                 elif max_hold is not None and (gidx - p["entry_gidx"]) >= max_hold:
                     reason, price = "max_hold", op
+                    exit_ev = {"trigger": f"持仓 {gidx - p['entry_gidx']} 日 ≥ 最长 {max_hold} 日"}
                 elif stop is not None and s.low[i] <= stop:
                     reason, price = "stop_loss", stop
+                    exit_ev = {"trigger": f"盘中最低 {s.low[i]} ≤ 止损价 {stop}"}
                 elif tp is not None and s.high[i] >= tp:
                     reason, price = "take_profit", tp
+                    exit_ev = {"trigger": f"盘中最高 {s.high[i]} ≥ 止盈价 {tp}"}
             if reason:
-                sell(code, gidx, price, reason, d)
+                sell(code, gidx, price, reason, d, exit_ev=exit_ev)
             else:
                 s.last_close = s.close[i]
 
@@ -190,6 +215,7 @@ def backtest(
                 if shares < 100:
                     continue
                 cash -= cost + fee
+                entry_ev = _signal_evidence(s, i - 1, cfg.entry, "入场信号")
                 positions[code] = {
                     "name": s.name,
                     "shares": shares,
@@ -199,7 +225,19 @@ def backtest(
                     "entry_date": _date_str(d),
                     "stop_price": op * (1 - stop_pct / 100) if stop_pct is not None else None,
                     "tp_price": op * (1 + tp_pct / 100) if tp_pct is not None else None,
+                    "entry_evidence": entry_ev,
                 }
+                day_actions.append({
+                    "code": code,
+                    "name": s.name,
+                    "action": "buy",
+                    "price": round(op, 4),
+                    "shares": shares,
+                    "amount": round(cost, 2),
+                    "fee": round(fee, 2),
+                    "reason": "entry",
+                    "evidence": entry_ev,
+                })
 
         # ---- mark to market ----
         for code, p in list(positions.items()):
@@ -211,18 +249,50 @@ def backtest(
         dd = (value / peak - 1) * 100 if peak else 0.0
         max_dd = min(max_dd, dd)
         equity_curve.append({"date": _date_str(d), "value": round(value, 2), "drawdown_pct": round(dd, 3)})
+        pos_snapshot = []
+        for code, p in positions.items():
+            s = stocks[code]
+            close_now = s.last_close or p["entry_price"]
+            pos_snapshot.append({
+                "code": code,
+                "name": p["name"],
+                "shares": p["shares"],
+                "cost": round(p["entry_price"], 4),
+                "close": round(close_now, 4),
+                "pnl_pct": round((close_now / p["entry_price"] - 1) * 100, 3) if p["entry_price"] else 0.0,
+            })
+        audit_daily.append({
+            "date": _date_str(d),
+            "actions": day_actions,
+            "cash": round(cash, 2),
+            "equity": round(value, 2),
+            "positions": pos_snapshot,
+        })
 
     # ---- force close at end ----
     for code in list(positions.keys()):
         p = positions[code]
         s = stocks[code]
         price = s.last_close or p["entry_price"]
-        sell(code, len(sim_dates) - 1, price, "end_of_data", s.dates[-1])
+        sell(code, len(sim_dates) - 1, price, "end_of_data", s.dates[-1],
+             exit_ev={"trigger": "回测期末，按最后收盘价估值平仓"})
 
-    return _metrics(cfg, params, label, initial_cash, trades, equity_curve, max_dd, len(stocks))
+    return _metrics(cfg, params, label, initial_cash, trades, equity_curve, max_dd, len(stocks), audit_daily)
 
 
-def _metrics(cfg, params, label, initial_cash, trades, equity_curve, max_dd, stock_count) -> dict:
+def _signal_evidence(s: _Stock, sig_idx: int, group, label: str) -> dict:
+    """构造信号判定依据快照（T 日收盘每条条件的实际值）。"""
+    verbose = eval_group_verbose(group, s.series, sig_idx)
+    return {
+        "signal_date": _date_str(s.dates[sig_idx]),
+        "label": label,
+        "logic": verbose.get("logic", "all"),
+        "conditions": verbose.get("conditions", []),
+        "passed": verbose.get("passed", False),
+    }
+
+
+def _metrics(cfg, params, label, initial_cash, trades, equity_curve, max_dd, stock_count, audit_daily=None) -> dict:
     closed = [t for t in trades if t["exit_reason"] != "end_of_data"]
     wins = [t for t in closed if t["pnl"] > 0]
     losses = [t for t in closed if t["pnl"] <= 0]
@@ -276,4 +346,5 @@ def _metrics(cfg, params, label, initial_cash, trades, equity_curve, max_dd, sto
         },
         "equity_curve": equity_curve,
         "trades": sorted(trades, key=lambda t: t["exit_date"]),
+        "audit": {"daily": audit_daily or []},
     }

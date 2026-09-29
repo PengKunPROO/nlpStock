@@ -1,7 +1,7 @@
 // 选股 view: strategy + universe picker → job progress → results
 import { api, pollJob } from '../api.js';
 import state from '../store.js';
-import { esc, fmtPct, fmtPrice, h, pctClass, toast } from '../util.js';
+import { esc, fmtPct, fmtPrice, h, paginate, pctClass, toast } from '../util.js';
 
 export async function renderScreenView(view) {
   let strategies = [];
@@ -125,8 +125,17 @@ function renderResults(el, result, isCached = false) {
         <div class="muted" style="font-size:12px">${esc(result.universe?.name || '')} · ${esc(result.as_of || '')} · ${(result.duration_ms / 1000).toFixed(1)}s${isCached ? ' · 上次结果' : ''}</div>
       </div>
     </div>
-    ${matched.length ? matched.map((m) => `
-      <div class="card" data-code="${esc(m.thscode)}" style="cursor:pointer;padding:13px 16px">
+    <div id="screen-matched"></div>
+    <div class="hint">点击结果查看K线与量能详情</div>
+  `;
+  const listDiv = document.getElementById('screen-matched');
+  if (!matched.length) {
+    listDiv.innerHTML = '<div class="card"><div class="empty">今日无个股满足全部入场条件。<br>可放宽阈值或更换股票池再试。</div></div>';
+    return;
+  }
+  paginate(listDiv, matched, (container, pageItems) => {
+    for (const m of pageItems) {
+      const card = h(`<div class="card" data-code="${esc(m.thscode)}" style="cursor:pointer;padding:13px 16px">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div style="min-width:0">
             <b>${esc(m.name)}</b> <span class="muted" style="font-size:12px">${esc(m.thscode)}</span>
@@ -140,13 +149,12 @@ function renderResults(el, result, isCached = false) {
             <div class="mono ${pctClass(m.change_pct)}" style="font-size:13px;font-weight:600">${fmtPct(m.change_pct)}</div>
           </div>
         </div>
-      </div>`).join('') : '<div class="card"><div class="empty">今日无个股满足全部入场条件。<br>可放宽阈值或更换股票池再试。</div></div>'}
-    <div class="hint">点击结果查看K线与量能详情</div>
-  `;
-  el.querySelectorAll('[data-code]').forEach((card) => {
-    card.onclick = () => {
-      state.chartCode = card.dataset.code;
-      location.hash = '#/chart';
-    };
-  });
+      </div>`);
+      card.onclick = () => {
+        state.chartCode = card.dataset.code;
+        location.hash = '#/chart';
+      };
+      container.appendChild(card);
+    }
+  }, 20);
 }

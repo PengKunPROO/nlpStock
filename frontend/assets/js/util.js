@@ -65,3 +65,43 @@ export function daysAgo(n) {
   const d = new Date(Date.now() - n * 86400000);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+
+// 通用分页：传入容器+数组+渲染函数，自动渲染页码控件
+export function paginate(container, items, renderPage, pageSize = 20) {
+  if (!items || items.length === 0) return;
+  const totalPages = Math.ceil(items.length / pageSize);
+  let current = 1;
+  const render = () => {
+    container.innerHTML = '';
+    const start = (current - 1) * pageSize;
+    const pageItems = items.slice(start, start + pageSize);
+    renderPage(container, pageItems, current, totalPages);
+    if (totalPages > 1) {
+      const nav = document.createElement('div');
+      nav.className = 'pager';
+      const btn = (label, page, disabled) => {
+        const b = document.createElement('button');
+        b.textContent = label;
+        b.className = 'page-btn' + (disabled ? ' disabled' : '');
+        b.disabled = disabled;
+        b.onclick = () => { if (!disabled) { current = page; render(); container.scrollIntoView({ block: 'start' }); } };
+        return b;
+      };
+      nav.appendChild(btn('‹', current - 1, current === 1));
+      const maxShow = 7;
+      let s = Math.max(1, current - Math.floor(maxShow / 2));
+      let e = Math.min(totalPages, s + maxShow - 1);
+      s = Math.max(1, e - maxShow + 1);
+      if (s > 1) { nav.appendChild(btn('1', 1, false)); if (s > 2) nav.appendChild(btn('…', 0, true)); }
+      for (let p = s; p <= e; p++) nav.appendChild(btn(String(p), p, p === current));
+      if (e < totalPages) { if (e < totalPages - 1) nav.appendChild(btn('…', 0, true)); nav.appendChild(btn(String(totalPages), totalPages, false)); }
+      nav.appendChild(btn('›', current + 1, current === totalPages));
+      const info = document.createElement('span');
+      info.className = 'page-info';
+      info.textContent = `${items.length} 条 · 第 ${current}/${totalPages} 页`;
+      nav.appendChild(info);
+      container.appendChild(nav);
+    }
+  };
+  render();
+}
