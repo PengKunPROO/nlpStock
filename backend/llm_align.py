@@ -44,6 +44,8 @@ _INDICATOR_CATALOG = """可用指标 kind 目录（indicators 数组元素）：
 - {"id":"boll_mid","kind":"BOLL_MID","of":"close","n":20,"k":2.0}  布林中轨 = MA(n)
 - {"id":"boll_low","kind":"BOLL_LOW","of":"close","n":20,"k":2.0}  布林下轨 = MID-k×STD
 指标 id 规则：小写snake_case，≤20字符，全局唯一。MACD/KDJ/BOLL 多条线需分别声明（参数保持一致）。
+of 字段除基础字段(open/high/low/close/volume)外，还可引用**先声明**的指标 id（禁止循环引用），例如对 DIF 再求均线：
+{"id":"difma5","kind":"MA","of":"dif","n":5}  = DIF 的 5 日均线（dif 需先声明）；同理 {"id":"kdjkma","kind":"EMA","of":"kdjk","n":5} = K 线的 5 日 EMA。
 交叉（金叉/死叉）表达法——用 lag 取昨日值组合，例如 MACD 金叉（DIF今日在DEA上方且昨日不高于）：
 {"logic":"all","conditions":[{"left":"dif","op":">","right":"dea"},{"left":"dif","op":"<=","right":"dea","lag":1,"right_lag":1}]}"""
 

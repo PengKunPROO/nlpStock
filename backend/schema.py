@@ -50,14 +50,14 @@ class IndicatorSpec(BaseModel):
                 raise ValueError(f"{name} must be in [2, 250]")
 
     def _check_of_optional(self) -> None:
-        if self.of is not None and self.of not in BASE_FIELDS:
-            raise ValueError(f"of must be one of {sorted(BASE_FIELDS)}")
+        if self.of is not None and self.of not in BASE_FIELDS and not _ID_RE.match(self.of):
+            raise ValueError(f"of must be a base field or a declared indicator id")
 
     @model_validator(mode="after")
     def _check_params(self) -> "IndicatorSpec":
         if self.kind in ("MA", "PCT_CHANGE"):
-            if self.of not in BASE_FIELDS:
-                raise ValueError(f"{self.kind} requires of in {sorted(BASE_FIELDS)}")
+            if self.of not in BASE_FIELDS and not _ID_RE.match(self.of or ""):
+                raise ValueError(f"{self.kind} requires of in base fields or a declared indicator id")
             if self.n is None or not (2 <= self.n <= 250):
                 raise ValueError(f"{self.kind} requires n in [2, 250]")
         elif self.kind == "VRATIO":
@@ -70,8 +70,8 @@ class IndicatorSpec(BaseModel):
             if not self.mas or len(self.mas) < 2:
                 raise ValueError("MA_CONVERGE requires mas with >= 2 entries")
         elif self.kind == "EMA":
-            if self.of not in BASE_FIELDS:
-                raise ValueError(f"EMA requires of in {sorted(BASE_FIELDS)}")
+            if self.of not in BASE_FIELDS and not _ID_RE.match(self.of or ""):
+                raise ValueError(f"EMA requires of in base fields or a declared indicator id")
             if self.n is None or not (2 <= self.n <= 250):
                 raise ValueError("EMA requires n in [2, 250]")
         elif self.kind in ("MACD_DIF", "MACD_DEA", "MACD_HIST"):
@@ -157,6 +157,24 @@ class BacktestDefaults(BaseModel):
         return _valid_date(v)
 
 
+def _assert_no_cycle(graph: dict[str, list[str]]) -> None:
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {n: WHITE for n in graph}
+
+    def dfs(n: str) -> None:
+        color[n] = GRAY
+        for m in graph[n]:
+            if color[m] == GRAY:
+                raise ValueError(f"indicator reference cycle detected at: {n} -> {m}")
+            if color[m] == WHITE:
+                dfs(m)
+        color[n] = BLACK
+
+    for n in graph:
+        if color[n] == WHITE:
+            dfs(n)
+
+
 class StrategyConfig(BaseModel):
     name: str
     description: str = ""
@@ -183,11 +201,22 @@ class StrategyConfig(BaseModel):
         if len(ids) != len(set(ids)):
             raise ValueError("indicator ids must be unique")
         known = set(ids) | BASE_FIELDS
+
+        graph: dict[str, list[str]] = {ind.id: [] for ind in self.indicators}
         for ind in self.indicators:
-            if ind.kind == "MA_CONVERGE":
-                for ref in ind.mas or []:
-                    if ref not in known:
-                        raise ValueError(f"MA_CONVERGE references unknown indicator: {ref}")
+            refs: list[str] = []
+            if ind.of and ind.of not in BASE_FIELDS:
+                if ind.of not in known:
+                    raise ValueError(f"indicator {ind.id} references unknown field/indicator: {ind.of}")
+                refs.append(ind.of)
+            for ref in ind.mas or []:
+                if ref not in known:
+                    raise ValueError(f"MA_CONVERGE references unknown indicator: {ref}")
+                if ref not in BASE_FIELDS:
+                    refs.append(ref)
+            graph[ind.id] = refs
+
+        _assert_no_cycle(graph)
 
         def walk(conds: list, depth: int) -> None:
             for c in conds:

@@ -276,6 +276,27 @@ def test_backtest_bad_date_rejected(client_fake_data):
     assert r.json()["error"]["code"] == "bad_request"
 
 
+def test_backtest_result_includes_strategy_info(client_fake_data):
+    c = client_fake_data
+    import copy
+
+    cfg = copy.deepcopy(REFERENCE_STRATEGY)
+    cfg["universe"] = {"type": "custom", "codes": ["600001.SH"]}
+    created = c.post("/api/strategies", json={"config": cfg}).json()
+    sid = created["id"]
+
+    r = c.post("/api/backtest", json={
+        "strategy_id": sid,
+        "start": "2025-01-01", "end": "2026-12-31",
+    })
+    job = wait_job(c, r.json()["job_id"])
+    assert job["status"] == "done", job.get("error")
+    params = job["result"]["params"]
+    assert params["strategy_id"] == sid
+    assert params["strategy_name"] == REFERENCE_STRATEGY["name"]
+    assert params["strategy_version"] == 1
+
+
 def test_kline_endpoint(client_fake_data):
     c = client_fake_data
     r = c.get("/api/kline?thscode=600519.SH&period=1d&count=60")

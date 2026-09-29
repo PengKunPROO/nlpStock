@@ -1,6 +1,8 @@
 """Tests for indicator engine and condition evaluator with hand-computed fixtures."""
 import math
 
+import pytest
+
 from backend.conditions import eval_leaf, signal_at
 from backend.indicators import compute_indicators
 from backend.schema import ConditionGroup, IndicatorSpec, LeafCondition
@@ -150,6 +152,68 @@ def test_none_values_are_false():
     series = {"close": [10, None, 12]}
     c = LeafCondition(left="close", op=">", right=0)
     assert eval_leaf(c, series, 1) is False
+
+
+# ---------- verbose 条件评估（审计追踪用） ----------
+
+
+def test_eval_group_verbose_leaf_values():
+    from backend.conditions import eval_group_verbose
+
+    series = {"dif": [-1.0, -0.5, -0.2, 0.1], "dea": [0.0, 0.0, 0.0, 0.0]}
+    group = ConditionGroup.model_validate({"logic": "all", "conditions": [
+        {"left": "dif", "op": ">", "right": "dea", "note": "金叉"},
+        {"left": "dif", "op": "<", "right": 0, "note": "水下"},
+    ]})
+    out = eval_group_verbose(group, series, 3)
+    assert out["logic"] == "all"
+    assert len(out["conditions"]) == 2
+    c0 = out["conditions"][0]
+    assert c0["expr"] == "dif > dea"
+    assert c0["left"] == 0.1 and c0["right"] == 0.0 and c0["passed"] is True
+    assert c0["note"] == "金叉"
+    c1 = out["conditions"][1]
+    assert c1["left"] == 0.1 and c1["right"] == 0 and c1["passed"] is False
+    assert out["passed"] is False  # all 逻辑：一条不成立则组不成立
+
+
+def test_eval_group_verbose_nested_and_lag():
+    from backend.conditions import eval_group_verbose
+
+    series = {"dif": [-1.0, -0.5, -0.2, 0.1], "dea": [0.0, -0.3, -0.1, -0.05]}
+    group = ConditionGroup.model_validate({"logic": "all", "conditions": [
+        {"logic": "all", "conditions": [
+            {"left": "dif", "op": ">", "right": "dea"},
+            {"left": "dif", "op": "<=", "right": "dea", "lag": 1, "right_lag": 1},
+        ]},
+    ]})
+    out = eval_group_verbose(group, series, 3)
+    inner = out["conditions"][0]
+    assert inner["logic"] == "all"
+    assert inner["conditions"][1]["expr"] == "dif(lag=1) <= dea(right_lag=1)"
+    assert inner["conditions"][1]["left"] == -0.2 and inner["conditions"][1]["right"] == -0.1
+
+
+def test_eval_group_verbose_within_and_none():
+    from backend.conditions import eval_group_verbose
+
+    series = {"close": [5, 20, 5, 5], "thr": [10, 10, 10, 10]}
+    group = ConditionGroup.model_validate({"logic": "all", "conditions": [
+        {"left": "close", "op": ">", "right": "thr", "within": 3},
+    ]})
+    out = eval_group_verbose(group, series, 3)
+    c = out["conditions"][0]
+    assert c["passed"] is True  # within：i=1 的 20>10 命中
+    assert c["left"] == 20 and c["right"] == 10  # 显示命中日的值
+    assert "within" in c["expr"] or c.get("within")
+    # None 值：left 为 None → passed False，left 为 None
+    series2 = {"close": [None, 5], "thr": [10, 10]}
+    g2 = ConditionGroup.model_validate({"logic": "all", "conditions": [
+        {"left": "close", "op": ">", "right": "thr"},
+    ]})
+    out2 = eval_group_verbose(g2, series2, 0)
+    assert out2["conditions"][0]["passed"] is False
+    assert out2["conditions"][0]["left"] is None
 
 
 def test_full_reference_strategy_pipeline_on_synthetic_bars():
@@ -311,3 +375,51 @@ def test_macd_golden_cross_condition_evaluates():
     assert signal_at(cross, series, 3) is True  # 0.1>0 且 昨日 -0.2<=0
     assert signal_at(cross, series, 4) is False  # 昨日已金叉，非新交叉
     assert signal_at(cross, series, 2) is False  # 今日都不满足
+
+
+# ---------- 指标嵌套（of 引用其他指标输出） ----------
+
+
+def test_ma_of_indicator_output_hand_computed():
+    # DIF 手算已知（closes=[10,11,12,14], fast=2 slow=3 signal=2）: [None, None, 0.5, 2/3]
+    bars = closes_bars([10, 11, 12, 14])
+    specs = [
+        IndicatorSpec(id="dif", kind="MACD_DIF", of="close", fast=2, slow=3, signal=2),
+        IndicatorSpec(id="difma2", kind="MA", of="dif", n=2),
+    ]
+    s = compute_indicators(bars, specs)
+    assert s["difma2"][0] is None and s["difma2"][1] is None and s["difma2"][2] is None
+    assert approx(s["difma2"][3], 7 / 12)  # (0.5 + 2/3) / 2
+
+
+def test_topological_order_independent_of_declaration():
+    # MA 声明在 DIF 之前（乱序）也能算 —— 拓扑排序
+    bars = closes_bars([10, 11, 12, 14])
+    specs = [
+        IndicatorSpec(id="difma2", kind="MA", of="dif", n=2),
+        IndicatorSpec(id="dif", kind="MACD_DIF", of="close", fast=2, slow=3, signal=2),
+    ]
+    s = compute_indicators(bars, specs)
+    assert approx(s["difma2"][3], 7 / 12)
+
+
+def test_indicator_cycle_raises():
+    bars = closes_bars([10, 11, 12, 14])
+    specs = [
+        IndicatorSpec(id="a", kind="MA", of="b", n=2),
+        IndicatorSpec(id="b", kind="MA", of="a", n=2),
+    ]
+    with pytest.raises(ValueError):
+        compute_indicators(bars, specs)
+
+
+def test_ma_of_indicator_none_safe_window():
+    # 窗口含 None → 输出 None（不把 None 当 0 累加）
+    bars = closes_bars([10, 11, 12, 14])
+    specs = [
+        IndicatorSpec(id="dif", kind="MACD_DIF", of="close", fast=2, slow=3, signal=2),
+        IndicatorSpec(id="difma3", kind="MA", of="dif", n=3),
+    ]
+    s = compute_indicators(bars, specs)
+    # dif=[None,None,0.5,2/3]，MA3 在 i=3 的窗口 [None,0.5,2/3] 含 None → None
+    assert s["difma3"][3] is None

@@ -153,17 +153,17 @@ def test_new_indicator_kinds_valid():
     [
         {"id": "e1", "kind": "EMA", "n": 5},  # 缺 of
         {"id": "e2", "kind": "EMA", "of": "close"},  # 缺 n
-        {"id": "e3", "kind": "EMA", "of": "vwap", "n": 5},  # of 非法
-        {"id": "e4", "kind": "MACD_DIF", "of": "vwap"},  # of 非法
+        {"id": "e3", "kind": "EMA", "of": "VWAP", "n": 5},  # of 非法格式（大写）
+        {"id": "e4", "kind": "MACD_DIF", "of": "VWAP"},  # of 非法格式
         {"id": "e5", "kind": "MACD_DIF", "fast": 1},  # fast 越界
         {"id": "e6", "kind": "MACD_DEA", "signal": 251},
         {"id": "e7", "kind": "KDJ_K", "m1": 1},
         {"id": "e8", "kind": "KDJ_J", "m2": 0},
         {"id": "e9", "kind": "RSI", "n": 1},
-        {"id": "e10", "kind": "RSI", "of": "vwap"},
+        {"id": "e10", "kind": "RSI", "of": "VWAP"},
         {"id": "e11", "kind": "BOLL_UP", "k": 0},  # k<=0
         {"id": "e12", "kind": "BOLL_MID", "n": 251},
-        {"id": "e13", "kind": "BOLL_LOW", "of": "vwap"},
+        {"id": "e13", "kind": "BOLL_LOW", "of": "VWAP"},
     ],
 )
 def test_new_indicator_kinds_rejected(spec):
@@ -198,3 +198,59 @@ def test_macd_cross_strategy_config_validates():
         },
     })
     assert len(cfg.indicators) == 4
+
+
+# ---------- 指标嵌套（of 引用其他指标） ----------
+
+
+def _nested_cfg(indicators):
+    return {
+        "name": "嵌套",
+        "universe": {"type": "custom", "codes": ["600519.SH"]},
+        "indicators": indicators,
+        "entry": {"logic": "all", "conditions": [{"left": "close", "op": ">", "right": 0}]},
+        "exit": {"logic": "any", "conditions": []},
+        "risk": {"stop_loss_pct": 8.0, "max_hold_days": 30, "take_profit_pct": None},
+        "backtest_defaults": {
+            "start": "2025-01-01", "end": "2026-09-18", "initial_cash": 1000000,
+            "position_pct": 20, "max_positions": 5, "fee_bps": 2.5, "stamp_tax_bps": 5.0,
+        },
+    }
+
+
+def test_indicator_of_reference_valid():
+    cfg = StrategyConfig.model_validate(_nested_cfg([
+        {"id": "dif", "kind": "MACD_DIF", "of": "close", "fast": 12, "slow": 26, "signal": 9},
+        {"id": "difma5", "kind": "MA", "of": "dif", "n": 5},
+    ]))
+    assert cfg.indicators[1].of == "dif"
+
+
+def test_indicator_of_reference_unknown_rejected():
+    with pytest.raises(ValidationError, match="unknown"):
+        StrategyConfig.model_validate(_nested_cfg([
+            {"id": "difma5", "kind": "MA", "of": "notexist", "n": 5},
+        ]))
+
+
+def test_indicator_of_reference_self_rejected():
+    with pytest.raises(ValidationError, match="cycle"):
+        StrategyConfig.model_validate(_nested_cfg([
+            {"id": "a", "kind": "MA", "of": "a", "n": 5},
+        ]))
+
+
+def test_indicator_of_reference_cycle_rejected():
+    with pytest.raises(ValidationError, match="cycle"):
+        StrategyConfig.model_validate(_nested_cfg([
+            {"id": "a", "kind": "MA", "of": "b", "n": 5},
+            {"id": "b", "kind": "MA", "of": "a", "n": 5},
+        ]))
+
+
+def test_indicator_ema_of_indicator_valid():
+    cfg = StrategyConfig.model_validate(_nested_cfg([
+        {"id": "kdjk", "kind": "KDJ_K", "n": 9},
+        {"id": "kdjkma", "kind": "EMA", "of": "kdjk", "n": 5},
+    ]))
+    assert cfg.indicators[1].of == "kdjk"

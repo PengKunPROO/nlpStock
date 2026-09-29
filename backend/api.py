@@ -249,7 +249,14 @@ def register_routes(app: FastAPI, core: Core) -> None:
                 raise ApiError(400, "bad_request", f"{k} 日期格式错误: {p[k]}") from e
 
         def run_bt(progress_cb):
-            return backtest(cfg, p, core.data, progress_cb=progress_cb)
+            result = backtest(cfg, p, core.data, progress_cb=progress_cb)
+            result["params"]["strategy_id"] = body.strategy_id
+            result["params"]["strategy_name"] = cfg.name
+            result["params"]["strategy_version"] = None
+            if body.strategy_id is not None:
+                detail = core.storage.get_strategy(body.strategy_id)
+                result["params"]["strategy_version"] = detail["version"]
+            return result
 
         return {"job_id": core.jobs.submit("backtest", run_bt)}
 
