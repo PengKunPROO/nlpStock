@@ -222,10 +222,8 @@ function buildForm(cfg) {
   }
   wrap.appendChild(indCard);
 
-  wrap.appendChild(h(`<div class="section-title">入场条件（全部满足才选出）</div>`));
-  wrap.appendChild(condCard(cfg, 'entry'));
-  wrap.appendChild(h(`<div class="section-title">离场条件（任一满足即离场）</div>`));
-  wrap.appendChild(condCard(cfg, 'exit'));
+  wrap.appendChild(h(`<div class="section-title">交易规则（${(cfg.rules || []).length} 条）</div>`));
+  wrap.appendChild(ruleCard(cfg));
 
   wrap.appendChild(h(`<div class="section-title">风控</div>`));
   const r = cfg.risk || {};
@@ -270,6 +268,9 @@ function collectForm(cfg) {
   };
   cfg.name = document.getElementById('f-name')?.value?.trim() || cfg.name;
   cfg.description = document.getElementById('f-desc')?.value ?? cfg.description;
+  // v2 统一用 rules：删除旧 entry/exit 兼容字段，避免冗余
+  delete cfg.entry;
+  delete cfg.exit;
   const t = document.getElementById('f-uni-type');
   if (t) {
     if (t.value === 'custom') cfg.universe = { type: 'custom', codes: (document.getElementById('f-uni-codes').value.match(/[0-9A-Z]+\.(SH|SZ|BJ|TI)/g)) || [] };
@@ -323,6 +324,7 @@ function universeCard(cfg) {
 }
 
 const FIELD_OPTS = ['open', 'high', 'low', 'close', 'volume'];
+const HOLD_FIELDS = ['pnl_pct', 'hold_days', 'dd_from_peak', 'cost'];
 const KIND_OPTS = ['MA', 'PCT_CHANGE', 'VRATIO', 'BODY_RATIO', 'UPPER_SHADOW_RATIO', 'MA_CONVERGE', 'BOX_TOP',
   'EMA', 'MACD_DIF', 'MACD_DEA', 'MACD_HIST', 'KDJ_K', 'KDJ_D', 'KDJ_J', 'RSI', 'BOLL_UP', 'BOLL_MID', 'BOLL_LOW'];
 const KIND_PARAMS = {
@@ -390,39 +392,73 @@ function indRow(ind, cfg) {
   return row;
 }
 
-function condCard(cfg, key) {
-  const card = h('<div class="card" id="cond-card"></div>');
-  const renderConds = () => {
+function ruleCard(cfg) {
+  const card = h('<div class="card" id="rule-list"></div>');
+  const render = () => {
     card.innerHTML = '';
-    const group = cfg[key];
-    for (const c of group.conditions) {
-      if (c.conditions) {
-        // nested group — read-only block with editable note + children leaves
-        const g = h(`<div class="cond cond-group">
-          <div class="note">组合（${c.logic === 'all' ? '全部满足' : '任一满足'}）${c.note ? ' · ' + esc(c.note) : ''}</div>
-        </div>`);
-        for (const leaf of c.conditions) g.appendChild(leafRow(leaf, cfg, c.conditions));
-        const del = h('<button class="del" style="float:right">✕ 删除组</button>');
-        del.onclick = () => { group.conditions = group.conditions.filter((x) => x !== c); renderConds(); };
-        g.appendChild(del);
-        card.appendChild(g);
-      } else {
-        card.appendChild(leafRow(c, cfg, group.conditions));
-      }
-    }
-    const add = h('<button class="btn sm secondary" style="margin-top:4px">＋ 添加条件</button>');
+    const rules = cfg.rules || [];
+    rules.forEach((rule) => card.appendChild(ruleRow(rule, cfg, rules)));
+    const add = h('<button class="btn sm secondary" style="margin-top:4px">＋ 添加规则</button>');
     add.onclick = () => {
-      group.conditions.push({ left: 'close', op: '>', right: 0, note: '新条件' });
-      renderConds();
+      rules.push({ when: { logic: 'all', conditions: [{ left: 'close', op: '>', right: 0, note: '新条件' }] }, action: 'buy', size_pct: null, max_times: null, note: '' });
+      render();
     };
     card.appendChild(add);
   };
-  renderConds();
+  render();
   return card;
 }
 
+function ruleRow(rule, cfg, rules) {
+  const row = h(`<div class="cond cond-group">
+    <div class="parts" style="margin-bottom:8px">
+      <select data-k="action">
+        <option value="buy" ${rule.action === 'buy' ? 'selected' : ''}>买入</option>
+        <option value="sell" ${rule.action === 'sell' ? 'selected' : ''}>卖出</option>
+      </select>
+      <input type="number" placeholder="仓位%" value="${rule.size_pct ?? ''}" data-k="size_pct" style="min-width:64px" title="买=权益% 卖=持仓%，空=默认">
+      <input type="number" placeholder="触发上限" value="${rule.max_times ?? ''}" data-k="max_times" style="min-width:64px" title="单只股票最多触发次数，空=不限">
+      <input type="text" placeholder="备注（原文依据）" value="${esc(rule.note || '')}" data-k="note" style="flex:2;min-width:120px">
+      <button class="del">✕ 删规则</button>
+    </div>
+    <div class="note">触发条件（${rule.when.logic === 'all' ? '全部满足' : '任一满足'}）</div>
+    <div class="rule-conds"></div>
+  </div>`);
+  const condsEl = row.querySelector('.rule-conds');
+  const renderConds = () => {
+    condsEl.innerHTML = '';
+    const g = rule.when;
+    for (const c of g.conditions) {
+      if (c.conditions) {
+        const grp = h(`<div class="cond cond-group"><div class="note">组合（${c.logic === 'all' ? '全部满足' : '任一满足'}）${c.note ? ' · ' + esc(c.note) : ''}</div></div>`);
+        for (const leaf of c.conditions) grp.appendChild(leafRow(leaf, cfg, c.conditions));
+        const delg = h('<button class="del" style="float:right">✕ 删除组</button>');
+        delg.onclick = () => { g.conditions = g.conditions.filter((x) => x !== c); renderConds(); };
+        grp.appendChild(delg);
+        condsEl.appendChild(grp);
+      } else {
+        condsEl.appendChild(leafRow(c, cfg, g.conditions));
+      }
+    }
+    const add = h('<button class="btn sm secondary" style="margin-top:4px">＋ 条件</button>');
+    add.onclick = () => { g.conditions.push({ left: 'close', op: '>', right: 0, note: '新条件' }); renderConds(); };
+    condsEl.appendChild(add);
+  };
+  renderConds();
+  row.querySelector('.del').onclick = () => {
+    const i = rules.indexOf(rule);
+    if (i >= 0) rules.splice(i, 1);
+    row.remove();
+  };
+  row.querySelector('[data-k="action"]').onchange = (e) => { rule.action = e.target.value; };
+  row.querySelector('[data-k="size_pct"]').onchange = (e) => { rule.size_pct = e.target.value === '' ? null : Number(e.target.value); };
+  row.querySelector('[data-k="max_times"]').onchange = (e) => { rule.max_times = e.target.value === '' ? null : Number(e.target.value); };
+  row.querySelector('[data-k="note"]').onchange = (e) => { rule.note = e.target.value; };
+  return row;
+}
+
 function leafRow(leaf, cfg, siblings) {
-  const ids = [...FIELD_OPTS, ...cfg.indicators.map((i) => i.id)];
+  const ids = [...FIELD_OPTS, ...HOLD_FIELDS, ...cfg.indicators.map((i) => i.id)];
   const idOpts = (sel) => ids.map((i) => `<option value="${i}" ${i === sel ? 'selected' : ''}>${i}</option>`).join('');
   const opOpts = ['>', '>=', '<', '<=', '=='].map((o) => `<option ${o === leaf.op ? 'selected' : ''}>${o}</option>`).join('');
   const isNumRight = typeof leaf.right === 'number';
@@ -489,8 +525,7 @@ async function renderDetail(view, sid) {
       </div>
       <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
         <span class="chip">${esc(cfg.universe.type === 'all' ? '全市场' : cfg.universe.code || '自选')}</span>
-        <span class="chip">入场 ${cfg.entry.conditions.length}</span>
-        <span class="chip">离场 ${cfg.exit.conditions.length}</span>
+        <span class="chip">规则 ${(cfg.rules || []).length} 条</span>
       </div>
       <div style="display:flex;gap:10px;margin-top:14px">
         <button class="btn sm secondary" id="d-edit">编辑（存新版本）</button>

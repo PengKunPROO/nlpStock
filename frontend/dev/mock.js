@@ -44,6 +44,22 @@
     backtest_defaults: { start: '2025-01-01', end: '2026-09-18', initial_cash: 1000000, position_pct: 20, max_positions: 5, fee_bps: 2.5, stamp_tax_bps: 5.0 },
   };
 
+  // v2 兼容：把 v1 的 entry/exit 转成 rules（模拟后端 model_dump 规范化输出）
+  function toRules(cfg) {
+    if (cfg.entry) {
+      const rules = [
+        { when: cfg.entry, action: 'buy', size_pct: null, max_times: null, note: '入场信号' },
+      ];
+      if (cfg.exit && cfg.exit.conditions && cfg.exit.conditions.length) {
+        rules.push({ when: cfg.exit, action: 'sell', size_pct: 100, max_times: null, note: '离场信号' });
+      }
+      delete cfg.entry;
+      delete cfg.exit;
+      cfg.rules = rules;
+    }
+    return cfg;
+  }
+
   let parseCalls = 0;
   let nextId = 1;
   const strategies = [];
@@ -151,13 +167,13 @@
       if (parseCalls % 2 === 1) {
         return { type: 'clarify', understanding: '你希望捕捉「超跌之后止跌反转」的票：先有一段阴跌和急跌，均线粘合视为止跌，底部放量站上关键均线确认反转，然后缩量回踩不破箱体上沿时进场；力竭（长上影/缩量/实体收窄）或破位时离场。', questions: ['「关键均线」具体指哪条？20日线还是60日线？', '止损幅度和最长持仓天数有偏好吗？'], round: Math.ceil(parseCalls / 2) };
       }
-      const cfg = JSON.parse(JSON.stringify(REF));
+      const cfg = toRules(JSON.parse(JSON.stringify(REF)));
       cfg.source_text = first ? first.content : '';
       return { type: 'config', config: cfg, summary: '八步叙事已量化为 12 项指标、8 条入场、5 条离场条件。', warnings: ['未提及止损，默认8%，请在审查页确认', '股票池默认沪深300'] };
     }
 
     if (p === '/api/strategies' && method === 'GET') {
-      return { items: strategies.map((s) => ({ id: s.id, name: s.name, description: s.description, version: s.version, updated_at: s.updated_at, parse_engine: 'llm', entry_count: s.entry.conditions.length, exit_count: s.exit.conditions.length })) };
+      return { items: strategies.map((s) => ({ id: s.id, name: s.name, description: s.description, version: s.version, updated_at: s.updated_at, parse_engine: 'llm', entry_count: (s.rules || []).filter((r) => r.action === 'buy').length, exit_count: (s.rules || []).filter((r) => r.action === 'sell').length })) };
     }
     if (p === '/api/strategies' && method === 'POST') {
       const s = { id: nextId++, version: 1, updated_at: new Date().toISOString(), ...JSON.parse(JSON.stringify(body.config)) };
@@ -287,5 +303,5 @@
   }
 
   // 预置一个策略便于查看列表
-  strategies.push({ id: nextId++, version: 2, updated_at: new Date().toISOString(), ...JSON.parse(JSON.stringify(REF)) });
+  strategies.push({ id: nextId++, version: 2, updated_at: new Date().toISOString(), ...toRules(JSON.parse(JSON.stringify(REF))) });
 })();
