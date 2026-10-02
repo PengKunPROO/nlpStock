@@ -144,6 +144,16 @@ class Storage:
                 ).fetchall()
             latest = vrows[-1]
             cfg = json.loads(latest["config_json"])
+            rules = cfg.get("rules")
+            if cfg.get("entry"):
+                entry_count = len(cfg.get("entry", {}).get("conditions", []))
+                exit_count = len((cfg.get("exit") or {}).get("conditions", []))
+            elif rules is not None:
+                entry_count = sum(1 for r in rules if r.get("action") == "buy")
+                exit_count = sum(1 for r in rules if r.get("action") == "sell")
+            else:
+                entry_count = 0
+                exit_count = 0
             out.append({
                 "id": r["id"],
                 "name": cfg.get("name", r["name"]),
@@ -151,8 +161,8 @@ class Storage:
                 "version": latest["version"],
                 "updated_at": r["updated_at"],
                 "parse_engine": cfg.get("parse_engine", "llm"),
-                "entry_count": len(cfg.get("entry", {}).get("conditions", [])),
-                "exit_count": len(cfg.get("exit", {}).get("conditions", [])),
+                "entry_count": entry_count,
+                "exit_count": exit_count,
             })
         return out
 

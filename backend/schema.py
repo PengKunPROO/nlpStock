@@ -7,6 +7,7 @@ from typing import Literal, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 BASE_FIELDS = {"open", "high", "low", "close", "volume"}
+HOLD_FIELDS = {"cost", "pnl_pct", "hold_days", "dd_from_peak"}  # 持仓状态字段（内置，无需声明）
 _OPS = (">", ">=", "<", "<=", "==")
 _ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,19}$")
 _THSCODE_RE = re.compile(r"^[0-9A-Z]{4,6}\.(SH|SZ|BJ|TI|OF)$")
@@ -117,6 +118,26 @@ class ConditionGroup(BaseModel):
     note: Union[str, None] = None
 
 
+class Rule(BaseModel):
+    """v2 规则：触发条件 → 动作（买/卖）+ 仓位比例 + 次数上限。补仓只是 buy 规则的一种。"""
+
+    when: ConditionGroup
+    action: Literal["buy", "sell"]
+    size_pct: Union[float, None] = None  # buy=当前权益% / sell=当前持仓%；null=用全局 position_pct(buy) / 100(sell)
+    max_times: Union[int, None] = None  # 单只股票最多触发次数；null=不限
+    note: str = ""
+
+    @model_validator(mode="after")
+    def _check(self) -> "Rule":
+        if not self.when.conditions:
+            raise ValueError("rule.when.conditions must not be empty")
+        if self.size_pct is not None and not (0 < self.size_pct <= 100):
+            raise ValueError("size_pct must be in (0, 100]")
+        if self.max_times is not None and self.max_times < 1:
+            raise ValueError("max_times must be >= 1")
+        return self
+
+
 class Universe(BaseModel):
     type: Literal["index", "sector", "custom", "all"]
     code: Union[str, None] = None
@@ -182,8 +203,9 @@ class StrategyConfig(BaseModel):
     parse_engine: str = "llm"
     universe: Universe
     indicators: list[IndicatorSpec] = Field(min_length=1, max_length=30)
-    entry: ConditionGroup
-    exit: ConditionGroup
+    entry: Union[ConditionGroup, None] = None
+    exit: Union[ConditionGroup, None] = None
+    rules: Union[list[Rule], None] = None
     risk: RiskConfig = RiskConfig()
     backtest_defaults: BacktestDefaults
 
@@ -196,11 +218,23 @@ class StrategyConfig(BaseModel):
         return v
 
     @model_validator(mode="after")
+    def _normalize_rules(self) -> "StrategyConfig":
+        """v1 兼容：entry/exit 自动转为 rules（先执行，供 _check_refs 使用）。"""
+        if not self.rules:
+            if self.entry is None:
+                raise ValueError("必须提供 rules 或 entry")
+            rules = [Rule(when=self.entry, action="buy", size_pct=None, note=self.entry.note or "入场信号")]
+            if self.exit is not None and self.exit.conditions:
+                rules.append(Rule(when=self.exit, action="sell", size_pct=100, note=self.exit.note or "离场信号"))
+            object.__setattr__(self, "rules", rules)
+        return self
+
+    @model_validator(mode="after")
     def _check_refs(self) -> "StrategyConfig":
         ids = [ind.id for ind in self.indicators]
         if len(ids) != len(set(ids)):
             raise ValueError("indicator ids must be unique")
-        known = set(ids) | BASE_FIELDS
+        known = set(ids) | BASE_FIELDS | HOLD_FIELDS
 
         graph: dict[str, list[str]] = {ind.id: [] for ind in self.indicators}
         for ind in self.indicators:
@@ -230,10 +264,8 @@ class StrategyConfig(BaseModel):
                     if isinstance(c.right, str) and c.right not in known:
                         raise ValueError(f"condition references unknown indicator/field: {c.right}")
 
-        if not self.entry.conditions:
-            raise ValueError("entry.conditions must not be empty")
-        walk(self.entry.conditions, 1)
-        walk(self.exit.conditions, 1)
+        for rule in self.rules or []:
+            walk(rule.when.conditions, 1)
         return self
 
 

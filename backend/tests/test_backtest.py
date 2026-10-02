@@ -187,7 +187,9 @@ def test_max_positions_limit():
     result = run(cfg, data, max_positions=2, position_pct=30)
     # entries happen on the same day for all 3, but only 2 slots
     assert result["metrics"]["trade_count"] <= 2 + 1  # at most 2 positions (re-entries allowed after exits)
-    assert all(t["shares"] == int(1000000 * 0.30 / t["entry_price"] / 100) * 100 for t in result["trades"])
+    # 首笔（首只票）满 30% 仓位；其余票受实时权益估值影响仓位略小，但为 100 股整数倍
+    assert result["trades"][0]["shares"] == int(1000000 * 0.30 / result["trades"][0]["entry_price"] / 100) * 100
+    assert all(t["shares"] % 100 == 0 and t["shares"] > 0 for t in result["trades"])
 
 
 def test_end_of_data_not_in_win_rate():

@@ -15,6 +15,7 @@ from .conditions import eval_group_verbose, signal_at
 from .data_service import DataService
 from .fuyao import CST
 from .indicators import compute_indicators
+from .schema import HOLD_FIELDS, ConditionGroup
 from .screener import parse_as_of
 
 EXIT_PRIORITY = ("stop_loss", "take_profit", "signal", "max_hold")
@@ -24,10 +25,36 @@ def _date_str(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=CST).strftime("%Y-%m-%d")
 
 
-class _Stock:
-    __slots__ = ("name", "dates", "date_idx", "open", "high", "low", "close", "entry_sig", "exit_sig", "last_close", "series", "entry_group", "exit_group")
+def _refs_hold(group) -> bool:
+    """条件组是否引用持仓状态字段（cost/pnl_pct/hold_days/dd_from_peak）。"""
+    for c in group.conditions:
+        if isinstance(c, ConditionGroup):
+            if _refs_hold(c):
+                return True
+        else:
+            if c.left in HOLD_FIELDS:
+                return True
+            if isinstance(c.right, str) and c.right in HOLD_FIELDS:
+                return True
+    return False
 
-    def __init__(self, name, bars, series, entry_group, exit_group):
+
+def _make_evidence(series: dict, sig_idx: int, date_str: str, group, label: str) -> dict:
+    """构造信号判定依据快照。"""
+    verbose = eval_group_verbose(group, series, sig_idx)
+    return {
+        "signal_date": date_str,
+        "label": label,
+        "logic": verbose.get("logic", "all"),
+        "conditions": verbose.get("conditions", []),
+        "passed": verbose.get("passed", False),
+    }
+
+
+class _Stock:
+    __slots__ = ("name", "dates", "date_idx", "open", "high", "low", "close", "last_close", "series", "open_sig")
+
+    def __init__(self, name, bars, series, open_rules):
         self.name = name
         self.dates = [b["date_ms"] for b in bars]
         self.date_idx = {ms: i for i, ms in enumerate(self.dates)}
@@ -37,10 +64,19 @@ class _Stock:
         self.close = [b["close"] for b in bars]
         self.last_close = self.close[-1] if self.close else None
         self.series = series
-        self.entry_group = entry_group
-        self.exit_group = exit_group
-        self.entry_sig = [signal_at(entry_group, series, i) for i in range(len(bars))]
-        self.exit_sig = [signal_at(exit_group, series, i) for i in range(len(bars))]
+        # 开仓规则信号预计算（open_rules = [(全局规则索引, Rule)]）
+        self.open_sig = {ridx: [signal_at(r.when, series, i) for i in range(len(bars))] for ridx, r in open_rules}
+
+
+def _hold_ctx(s: _Stock, sig_idx: int, p: dict) -> dict:
+    """构造持仓期规则评估上下文：单元素 series，索引 0 = 信号日（含持仓状态字段）。"""
+    ctx = {k: [arr[sig_idx]] for k, arr in s.series.items()}
+    cost = p["entry_price"]
+    ctx["cost"] = [cost]
+    ctx["pnl_pct"] = [(s.close[sig_idx] / cost - 1) * 100 if cost else 0.0]
+    ctx["hold_days"] = [p["hold_days"]]
+    ctx["dd_from_peak"] = [(s.close[sig_idx] / p["peak_close"] - 1) * 100 if p["peak_close"] else 0.0]
+    return ctx
 
 
 def backtest(
@@ -67,6 +103,11 @@ def backtest(
     universe = params.get("universe") or cfg.universe.model_dump()
     codes, names, label = data.resolve_universe(universe)
 
+    # 规则分类：开仓（buy 且不引用持仓状态）→ 预计算；持仓期（sell 或引用持仓状态）→ 实时评估
+    rules = cfg.rules or []
+    open_rules = [(i, r) for i, r in enumerate(rules) if r.action == "buy" and not _refs_hold(r.when)]
+    hold_rules = [(i, r) for i, r in enumerate(rules) if r.action == "sell" or _refs_hold(r.when)]
+
     stocks: dict[str, _Stock] = {}
     done = 0
     lock_pct = {"n": 0}
@@ -77,7 +118,7 @@ def backtest(
         if len(bars) < 40:
             return code, None
         series = compute_indicators(bars, cfg.indicators)
-        return code, _Stock(names.get(code) or code, bars, series, cfg.entry, cfg.exit)
+        return code, _Stock(names.get(code) or code, bars, series, open_rules)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(load, c): c for c in codes}
@@ -113,15 +154,22 @@ def backtest(
             total += p["shares"] * (s.last_close or p["entry_price"])
         return total
 
-    def sell(code: str, gidx: int, price: float, reason: str, date_ms: int, exit_ev: dict | None = None) -> None:
+    def sell(code: str, gidx: int, price: float, reason: str, date_ms: int, exit_ev: dict | None = None, sell_pct: float = 100.0) -> None:
+        """卖出（sell_pct=卖出持仓百分比，100=清仓）。"""
         nonlocal cash
-        p = positions.pop(code)
-        gross = p["shares"] * price
+        p = positions[code]
+        shares = p["shares"] if sell_pct >= 100 else int(p["shares"] * sell_pct / 100 / 100) * 100
+        if shares <= 0:
+            return
+        if p["shares"] - shares < 100:  # 剩余不足一手 → 全卖
+            shares = p["shares"]
+        gross = shares * price
         fee = gross * fee_rate
         tax = gross * tax_rate
         net = gross - fee - tax
         cash += net
-        pnl = net - p["cost"]
+        sell_cost = p["cost"] * (shares / p["shares"])
+        pnl = net - sell_cost
         trades.append({
             "code": code,
             "name": p["name"],
@@ -129,9 +177,9 @@ def backtest(
             "entry_price": round(p["entry_price"], 4),
             "exit_date": _date_str(date_ms),
             "exit_price": round(price, 4),
-            "shares": p["shares"],
+            "shares": shares,
             "pnl": round(pnl, 2),
-            "pnl_pct": round(pnl / p["cost"] * 100, 4) if p["cost"] else 0.0,
+            "pnl_pct": round(pnl / sell_cost * 100, 4) if sell_cost else 0.0,
             "holding_days": gidx - p["entry_gidx"],
             "exit_reason": reason,
             "entry_evidence": p.get("entry_evidence"),
@@ -142,16 +190,75 @@ def backtest(
             "name": p["name"],
             "action": "sell",
             "price": round(price, 4),
-            "shares": p["shares"],
+            "shares": shares,
             "amount": round(gross, 2),
             "fee": round(fee + tax, 2),
             "reason": reason,
             "evidence": exit_ev,
         })
+        if shares >= p["shares"]:
+            positions.pop(code)
+        else:
+            p["shares"] -= shares
+            p["cost"] -= sell_cost
+
+    def buy(code: str, gidx: int, price: float, date_ms: int, size_pct: float, entry_ev: dict, reason: str) -> bool:
+        """买入/加仓（size_pct=当前权益%）。返回是否成交。"""
+        nonlocal cash
+        s = stocks[code]
+        equity_now = cash + market_value()
+        shares = int(equity_now * size_pct / 100.0 / price / 100) * 100
+        if shares < 100:
+            return False
+        cost = shares * price
+        fee = cost * fee_rate
+        while shares >= 100 and cost + fee > cash:
+            shares -= 100
+            cost = shares * price
+            fee = cost * fee_rate
+        if shares < 100:
+            return False
+        cash -= cost + fee
+        if code in positions:
+            p = positions[code]
+            p["shares"] += shares
+            p["cost"] += cost + fee
+            p["entry_price"] = p["cost"] / p["shares"]  # 加权成本价
+            if stop_pct is not None:
+                p["stop_price"] = p["entry_price"] * (1 - stop_pct / 100)
+            if tp_pct is not None:
+                p["tp_price"] = p["entry_price"] * (1 + tp_pct / 100)
+        else:
+            positions[code] = {
+                "name": s.name,
+                "shares": shares,
+                "entry_price": price,
+                "cost": cost + fee,
+                "entry_gidx": gidx,
+                "entry_date": _date_str(date_ms),
+                "stop_price": price * (1 - stop_pct / 100) if stop_pct is not None else None,
+                "tp_price": price * (1 + tp_pct / 100) if tp_pct is not None else None,
+                "entry_evidence": entry_ev,
+                "rule_counts": {},
+                "peak_close": price,
+                "hold_days": 0,
+            }
+        day_actions.append({
+            "code": code,
+            "name": s.name,
+            "action": "buy",
+            "price": round(price, 4),
+            "shares": shares,
+            "amount": round(cost, 2),
+            "fee": round(fee, 2),
+            "reason": reason,
+            "evidence": entry_ev,
+        })
+        return True
 
     for gidx, d in enumerate(sim_dates):
         day_actions: list[dict] = []
-        # ---- exit phase (open) ----
+        # ---- 1. 风控强制离场 + 持仓期规则（sell 减仓/清仓 + buy 加仓）----
         for code in list(positions.keys()):
             p = positions[code]
             s = stocks[code]
@@ -159,91 +266,76 @@ def backtest(
                 continue
             i = s.date_idx[d]
             op = s.open[i]
+            if gidx <= p["entry_gidx"]:
+                continue  # 买入当天不卖（T+1）
             stop = p["stop_price"]
             tp = p["tp_price"]
             reason = None
             price = None
             exit_ev: dict | None = None
-            if gidx > p["entry_gidx"]:
-                if stop is not None and op <= stop:
-                    reason, price = "stop_loss", op
-                    exit_ev = {"trigger": f"开盘价 {op} ≤ 止损价 {stop}"}
-                elif tp is not None and op >= tp:
-                    reason, price = "take_profit", op
-                    exit_ev = {"trigger": f"开盘价 {op} ≥ 止盈价 {tp}"}
-                elif i > 0 and s.exit_sig[i - 1]:
-                    reason, price = "signal", op
-                    exit_ev = _signal_evidence(s, i - 1, cfg.exit, "离场信号")
-                elif max_hold is not None and (gidx - p["entry_gidx"]) >= max_hold:
-                    reason, price = "max_hold", op
-                    exit_ev = {"trigger": f"持仓 {gidx - p['entry_gidx']} 日 ≥ 最长 {max_hold} 日"}
-                elif stop is not None and s.low[i] <= stop:
-                    reason, price = "stop_loss", stop
-                    exit_ev = {"trigger": f"盘中最低 {s.low[i]} ≤ 止损价 {stop}"}
-                elif tp is not None and s.high[i] >= tp:
-                    reason, price = "take_profit", tp
-                    exit_ev = {"trigger": f"盘中最高 {s.high[i]} ≥ 止盈价 {tp}"}
+            if stop is not None and op <= stop:
+                reason, price, exit_ev = "stop_loss", op, {"trigger": f"开盘价 {op} ≤ 止损价 {stop}"}
+            elif tp is not None and op >= tp:
+                reason, price, exit_ev = "take_profit", op, {"trigger": f"开盘价 {op} ≥ 止盈价 {tp}"}
+            elif max_hold is not None and (gidx - p["entry_gidx"]) >= max_hold:
+                reason, price, exit_ev = "max_hold", op, {"trigger": f"持仓 {gidx - p['entry_gidx']} 日 ≥ 最长 {max_hold} 日"}
+            elif stop is not None and s.low[i] <= stop:
+                reason, price, exit_ev = "stop_loss", stop, {"trigger": f"盘中最低 {s.low[i]} ≤ 止损价 {stop}"}
+            elif tp is not None and s.high[i] >= tp:
+                reason, price, exit_ev = "take_profit", tp, {"trigger": f"盘中最高 {s.high[i]} ≥ 止盈价 {tp}"}
             if reason:
                 sell(code, gidx, price, reason, d, exit_ev=exit_ev)
-            else:
-                s.last_close = s.close[i]
+                continue
+            # 持仓期规则：信号在 i-1 日收盘判定，i 日开盘执行
+            if i > 0:
+                ctx = _hold_ctx(s, i - 1, p)
+                for ridx, r in hold_rules:
+                    if r.max_times is not None and p["rule_counts"].get(ridx, 0) >= r.max_times:
+                        continue
+                    if not signal_at(r.when, ctx, 0):
+                        continue
+                    ev = _make_evidence(ctx, 0, _date_str(s.dates[i - 1]), r.when, r.note or r.action)
+                    if r.action == "sell":
+                        sell_pct = r.size_pct if r.size_pct is not None else 100.0
+                        sell(code, gidx, op, "signal", d, exit_ev=ev, sell_pct=sell_pct)
+                        p["rule_counts"][ridx] = p["rule_counts"].get(ridx, 0) + 1
+                        if code not in positions:
+                            break  # 已清仓
+                    else:  # buy 加仓
+                        sz = r.size_pct if r.size_pct is not None else position_pct
+                        if buy(code, gidx, op, d, sz, ev, "add"):
+                            p["rule_counts"][ridx] = p["rule_counts"].get(ridx, 0) + 1
 
-        # ---- entry phase (open), signal from previous close ----
-        if len(positions) < max_positions:
-            equity_now = cash + market_value()
-            budget = equity_now * position_pct / 100.0
-            for code, s in stocks.items():
+        # ---- 2. 开仓规则（对未持仓股票）----
+        for code, s in stocks.items():
+            if len(positions) >= max_positions:
+                break
+            if code in positions or d not in s.date_idx:
+                continue
+            i = s.date_idx[d]
+            if i == 0:
+                continue
+            for ridx, r in open_rules:
                 if len(positions) >= max_positions:
                     break
-                if code in positions or d not in s.date_idx:
-                    continue
-                i = s.date_idx[d]
-                if i == 0 or not s.entry_sig[i - 1]:
+                if not s.open_sig[ridx][i - 1]:
                     continue
                 op = s.open[i]
                 if not op or op <= 0:
                     continue
-                shares = int(budget / op / 100) * 100
-                if shares < 100:
-                    continue
-                cost = shares * op
-                fee = cost * fee_rate
-                while shares >= 100 and cost + fee > cash:
-                    shares -= 100
-                    cost = shares * op
-                    fee = cost * fee_rate
-                if shares < 100:
-                    continue
-                cash -= cost + fee
-                entry_ev = _signal_evidence(s, i - 1, cfg.entry, "入场信号")
-                positions[code] = {
-                    "name": s.name,
-                    "shares": shares,
-                    "entry_price": op,
-                    "cost": cost + fee,
-                    "entry_gidx": gidx,
-                    "entry_date": _date_str(d),
-                    "stop_price": op * (1 - stop_pct / 100) if stop_pct is not None else None,
-                    "tp_price": op * (1 + tp_pct / 100) if tp_pct is not None else None,
-                    "entry_evidence": entry_ev,
-                }
-                day_actions.append({
-                    "code": code,
-                    "name": s.name,
-                    "action": "buy",
-                    "price": round(op, 4),
-                    "shares": shares,
-                    "amount": round(cost, 2),
-                    "fee": round(fee, 2),
-                    "reason": "entry",
-                    "evidence": entry_ev,
-                })
+                sz = r.size_pct if r.size_pct is not None else position_pct
+                ev = _make_evidence(s.series, i - 1, _date_str(s.dates[i - 1]), r.when, r.note or "入场")
+                if buy(code, gidx, op, d, sz, ev, "entry"):
+                    break  # 该股已开仓，跳过其余开仓规则
 
-        # ---- mark to market ----
+        # ---- 3. mark to market ----
         for code, p in list(positions.items()):
             s = stocks[code]
             if d in s.date_idx:
                 s.last_close = s.close[s.date_idx[d]]
+                if gidx > p["entry_gidx"]:
+                    p["hold_days"] += 1
+                p["peak_close"] = max(p["peak_close"], s.last_close)
         value = cash + market_value()
         peak = max(peak, value)
         dd = (value / peak - 1) * 100 if peak else 0.0
@@ -278,18 +370,6 @@ def backtest(
              exit_ev={"trigger": "回测期末，按最后收盘价估值平仓"})
 
     return _metrics(cfg, params, label, initial_cash, trades, equity_curve, max_dd, len(stocks), audit_daily)
-
-
-def _signal_evidence(s: _Stock, sig_idx: int, group, label: str) -> dict:
-    """构造信号判定依据快照（T 日收盘每条条件的实际值）。"""
-    verbose = eval_group_verbose(group, s.series, sig_idx)
-    return {
-        "signal_date": _date_str(s.dates[sig_idx]),
-        "label": label,
-        "logic": verbose.get("logic", "all"),
-        "conditions": verbose.get("conditions", []),
-        "passed": verbose.get("passed", False),
-    }
 
 
 def _metrics(cfg, params, label, initial_cash, trades, equity_curve, max_dd, stock_count, audit_daily=None) -> dict:

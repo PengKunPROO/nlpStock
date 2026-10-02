@@ -47,7 +47,12 @@ _INDICATOR_CATALOG = """可用指标 kind 目录（indicators 数组元素）：
 of 字段除基础字段(open/high/low/close/volume)外，还可引用**先声明**的指标 id（禁止循环引用），例如对 DIF 再求均线：
 {"id":"difma5","kind":"MA","of":"dif","n":5}  = DIF 的 5 日均线（dif 需先声明）；同理 {"id":"kdjkma","kind":"EMA","of":"kdjk","n":5} = K 线的 5 日 EMA。
 交叉（金叉/死叉）表达法——用 lag 取昨日值组合，例如 MACD 金叉（DIF今日在DEA上方且昨日不高于）：
-{"logic":"all","conditions":[{"left":"dif","op":">","right":"dea"},{"left":"dif","op":"<=","right":"dea","lag":1,"right_lag":1}]}"""
+{"logic":"all","conditions":[{"left":"dif","op":">","right":"dea"},{"left":"dif","op":"<=","right":"dea","lag":1,"right_lag":1}]}
+持仓状态字段（内置，可直接在条件 left/right 引用，无需在 indicators 声明；未持仓时为 None → 引用它的条件不成立）：
+- pnl_pct 相对成本价浮盈亏%（"下跌5%"→ pnl_pct<=-5；"涨10%"→ pnl_pct>=10）
+- hold_days 持仓交易日数（"持仓满N日"→ hold_days>=N）
+- dd_from_peak 距持仓期最高收盘价回撤%（≤0，常为负）
+- cost 加权成本价"""
 
 _CONDITION_MODEL = """条件模型（entry/exit 的 conditions 数组元素）：
 叶子条件：{"left":"close","op":">","right":"ma20","right_factor":0.98,"lag":0,"right_lag":0,"within":15,"note":"原文依据"}
@@ -59,6 +64,24 @@ _CONDITION_MODEL = """条件模型（entry/exit 的 conditions 数组元素）�
 - note：必须写，标注对应的用户原话或量化理由，供用户审查
 分组条件（最多一层嵌套）：{"logic":"all"|"any","conditions":[叶子或分组],"note":"..."}
 entry.logic/exit.logic：all=全部满足，any=任一满足（离场通常用any）。"""
+
+_RULES_MODEL = """策略规则模型（v2，config 的 rules 数组；取代 entry/exit，每条 = 触发条件 → 买卖动作 + 仓位）：
+{"when":{条件组},"action":"buy"|"sell","size_pct":33.33,"max_times":1,"note":"原文依据"}
+- action=buy：size_pct = 占**当前总权益**的%（如 33.33 = 买 1/3 仓）；null = 用全局 position_pct
+- action=sell：size_pct = 占**当前持仓股数**的%（100 = 清仓，50 = 卖一半）；null = 100
+- max_times：该规则在单只股票上最多触发次数（"跌5%补仓"这类必须设 1，防止反复补仓）；null = 不限
+- 补仓/加仓 = 一条 action=buy 的规则（when 引用 pnl_pct/hold_days 等持仓字段），不是特殊字段
+- 减仓/分批止盈 = action=sell 且 size_pct<100
+- 风控（止损/止盈/最长持仓）仍用 risk 字段，不写成 rules
+
+示例（用户："MACD死叉买三分之一仓，下跌5%再补仓三分之一，涨10%减半，金叉清仓，止损8%"）：
+{"rules":[
+ {"when":{"logic":"all","conditions":[{"logic":"all","conditions":[{"left":"dif","op":"<","right":"dea"},{"left":"dif","op":">=","right":"dea","lag":1,"right_lag":1}]}]},"action":"buy","size_pct":33.33,"max_times":null,"note":"MACD死叉买入1/3仓"},
+ {"when":{"logic":"all","conditions":[{"left":"pnl_pct","op":"<=","right":-5}]},"action":"buy","size_pct":33.33,"max_times":1,"note":"下跌5%补仓1/3"},
+ {"when":{"logic":"all","conditions":[{"left":"pnl_pct","op":">=","right":10}]},"action":"sell","size_pct":50,"max_times":null,"note":"涨10%减半"},
+ {"when":{"logic":"all","conditions":[{"logic":"all","conditions":[{"left":"dif","op":">","right":"dea"},{"left":"dif","op":"<=","right":"dea","lag":1,"right_lag":1}]}]},"action":"sell","size_pct":100,"max_times":null,"note":"MACD金叉清仓"}
+]}
+risk 用 {"stop_loss_pct":8.0,"max_hold_days":null,"take_profit_pct":null}"""
 
 _PROTOCOL = """输出协议（严格遵守）：
 每次只输出一个 JSON 对象，两种形态二选一：
@@ -75,7 +98,8 @@ _PROTOCOL = """输出协议（严格遵守）：
 - 用户没说的参数用行业常见默认值，并把每个默认值写入 warnings 供审查
 - 信息足够时立即输出 config，不要为了流程而追问；通常 1-2 轮收敛
 - 分阶段叙事（先A后B再C）必须用 within 回看语义表达阶段先后
-- config 必须可通过 StrategyConfig 校验：指标id全部声明、条件引用可解析、universe/risk/backtest_defaults 完整"""
+- 买多少/加仓/减仓必须用 rules 表达（见规则模型），不要用 entry/exit
+- config 必须可通过 StrategyConfig 校验：指标id全部声明、条件引用可解析、rules 非空且 when 条件非空、universe/risk/backtest_defaults 完整"""
 
 _REFERENCE = "完整参考示例（用户描述“阴跌急跌止跌反转回踩进场”时的标准量化输出）：\n" + json.dumps(
     REFERENCE_STRATEGY, ensure_ascii=False, indent=1
@@ -87,10 +111,13 @@ SYSTEM_PROMPT = f"""你是A股量化策略架构师。任务：把用户的自�
 
 {_CONDITION_MODEL}
 
+{_RULES_MODEL}
+
 config 其余字段：
 - universe：{{"type":"index"|"sector"|"custom"|"all","code":"000300.SH","codes":[...]}}（index/sector需code，custom需codes，all=全市场）
 - risk：{{"stop_loss_pct":8.0,"max_hold_days":30,"take_profit_pct":null}}（null=禁用）
 - backtest_defaults：{{"start":"2025-01-01","end":"<今天>","initial_cash":1000000,"position_pct":20,"max_positions":5,"fee_bps":2.5,"stamp_tax_bps":5.0}}
+- 注：v2 策略用 rules；entry/exit 是旧版兼容写法，不要再输出
 
 {_PROTOCOL}
 
