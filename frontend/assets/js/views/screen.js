@@ -135,6 +135,15 @@ function renderResults(el, result, isCached = false) {
   }
   paginate(listDiv, matched, (container, pageItems) => {
     for (const m of pageItems) {
+      const sigTrack = (m.chg_5d !== null && m.chg_5d !== undefined) || (m.chg_20d !== null && m.chg_20d !== undefined)
+        ? `<div style="display:flex;gap:10px;margin-top:8px;font-size:12px;flex-wrap:wrap">
+            <span class="muted">信号后:</span>
+            <span class="mono ${pctClass(m.chg_5d)}">5日 ${fmtPct(m.chg_5d)}</span>
+            <span class="muted">/ 大盘 <span class="mono ${pctClass(m.bench_5d)}">${fmtPct(m.bench_5d)}</span></span>
+            <span class="mono ${pctClass(m.chg_20d)}">20日 ${fmtPct(m.chg_20d)}</span>
+            <span class="muted">/ 大盘 <span class="mono ${pctClass(m.bench_20d)}">${fmtPct(m.bench_20d)}</span></span>
+          </div>`
+        : '';
       const card = h(`<div class="card" data-code="${esc(m.thscode)}" style="cursor:pointer;padding:13px 16px">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div style="min-width:0">
@@ -149,6 +158,7 @@ function renderResults(el, result, isCached = false) {
             <div class="mono ${pctClass(m.change_pct)}" style="font-size:13px;font-weight:600">${fmtPct(m.change_pct)}</div>
           </div>
         </div>
+        ${sigTrack}
       </div>`);
       card.onclick = () => {
         state.chartCode = card.dataset.code;

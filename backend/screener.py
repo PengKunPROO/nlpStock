@@ -54,6 +54,29 @@ def _referenced_ids(cfg: StrategyConfig) -> list[str]:
     return sorted(ids)
 
 
+def _find_as_of_index(bars: list[dict], end_ms: int) -> int | None:
+    """找到 ≤ end_ms 的最后一根K线索引（二分）。"""
+    lo, hi = 0, len(bars) - 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if bars[mid]["date_ms"] <= end_ms:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return hi if hi >= 0 else None
+
+
+def _forward_return(bars: list[dict], sig_idx: int, n_days: int) -> float | None:
+    """信号日 → n_days 个交易日后的涨跌%（数据不足返回 None）。"""
+    tgt = sig_idx + n_days
+    if tgt >= len(bars):
+        return None
+    base = bars[sig_idx]["close"]
+    if not base:
+        return None
+    return round((bars[tgt]["close"] / base - 1) * 100, 2)
+
+
 def screen(
     cfg: StrategyConfig,
     data: DataService,
@@ -68,16 +91,50 @@ def screen(
     specs = cfg.indicators
     ref_ids = _referenced_ids(cfg)
 
+    # 大盘基准（沪深300）：信号追踪对照
+    benchmark_closes: list[tuple[int, float]] = []
+    try:
+        bench_bars = data.get_bars("000300.SH", kind="index", count=count + 60)
+        benchmark_closes = [(b["date_ms"], b["close"]) for b in bench_bars]
+    except Exception:
+        pass
+
+    def _benchmark_forward(sig_ms: int, n_days: int) -> float | None:
+        """基准从信号日 → n_days 个交易日后的涨跌%。"""
+        if not benchmark_closes:
+            return None
+        # 找信号日在基准中的位置
+        idx = None
+        for j, (ms, _) in enumerate(benchmark_closes):
+            if ms == sig_ms:
+                idx = j
+                break
+            if ms > sig_ms:
+                idx = j - 1 if j > 0 else None
+                break
+        if idx is None or idx + n_days >= len(benchmark_closes):
+            return None
+        base = benchmark_closes[idx][1]
+        if not base:
+            return None
+        return round((benchmark_closes[idx + n_days][1] / base - 1) * 100, 2)
+
     matched: list[dict] = []
     state = {"done": 0, "failed": 0, "last_date": 0}
 
     def work(code: str):
         kind = data.kind_for(code)
-        bars = data.get_bars(code, kind=kind, end_ms=end_ms, count=count)
+        # as_of 为历史日期时取到最新（含信号日之后数据用于信号追踪）
+        bars = data.get_bars(code, kind=kind, count=count + 60)
         if len(bars) < MIN_BARS:
             return None
-        series = compute_indicators(bars, specs)
-        i = len(bars) - 1
+        if as_of:
+            i = _find_as_of_index(bars, end_ms)
+            if i is None or i < 30:
+                return None
+        else:
+            i = len(bars) - 1
+        series = compute_indicators(bars[: i + 1], specs)
         notes: list[str] = []
         if not _collect_matched(cfg.entry, series, i, notes):
             return None
@@ -88,6 +145,7 @@ def screen(
         change_pct = None
         if i > 0 and bars[i - 1]["close"]:
             change_pct = round((bars[i]["close"] / bars[i - 1]["close"] - 1) * 100, 3)
+        sig_ms = bars[i]["date_ms"]
         return {
             "thscode": code,
             "name": names.get(code) or code,
@@ -95,7 +153,11 @@ def screen(
             "change_pct": change_pct,
             "signals": notes,
             "snapshot": snapshot,
-            "last_date_ms": bars[i]["date_ms"],
+            "last_date_ms": sig_ms,
+            "chg_5d": _forward_return(bars, i, 5),
+            "chg_20d": _forward_return(bars, i, 20),
+            "bench_5d": _benchmark_forward(sig_ms, 5),
+            "bench_20d": _benchmark_forward(sig_ms, 20),
         }
 
     total = len(codes)
