@@ -69,10 +69,11 @@ _RULES_MODEL = """策略规则模型（v2，config 的 rules 数组；取代 ent
 {"when":{条件组},"action":"buy"|"sell","size_pct":33.33,"max_times":1,"note":"原文依据"}
 - action=buy：size_pct = 占**当前总权益**的%（如 33.33 = 买 1/3 仓）；null = 用全局 position_pct
 - action=sell：size_pct = 占**当前持仓股数**的%（100 = 清仓，50 = 卖一半）；null = 100
-- max_times：该规则在单只股票上最多触发次数（"跌5%补仓"这类必须设 1，防止反复补仓）；null = 不限
+- max_times：该规则在单只股票的单次持仓内最多触发次数（"跌5%补仓"这类必须设 1，防止反复补仓）；null = 不限；清仓后重置
 - 补仓/加仓 = 一条 action=buy 的规则（when 引用 pnl_pct/hold_days 等持仓字段），不是特殊字段
-- 减仓/分批止盈 = action=sell 且 size_pct<100
-- 风控（止损/止盈/最长持仓）仍用 risk 字段，不写成 rules
+- 减仓/分批止盈 = action=sell 且 size_pct<100；阶梯止盈 = 多条 sell 规则各设阈值档
+- 移动止损两种口径："从最高点回落X%离场"若指盘中保护 → risk.trailing_stop_pct（引擎跟踪持仓期盘中最高价，盘中跌破止损价即成交）；若指收盘确认 → sell 规则用 dd_from_peak<=-X（T收盘判定、T+1开盘卖）。用户未明确时默认 trailing_stop_pct 并写入 warnings
+- 风控（止损/止盈/移动止损/最长持仓）仍用 risk 字段，不写成 rules
 
 示例（用户："MACD死叉买三分之一仓，下跌5%再补仓三分之一，涨10%减半，金叉清仓，止损8%"）：
 {"rules":[
@@ -81,7 +82,13 @@ _RULES_MODEL = """策略规则模型（v2，config 的 rules 数组；取代 ent
  {"when":{"logic":"all","conditions":[{"left":"pnl_pct","op":">=","right":10}]},"action":"sell","size_pct":50,"max_times":null,"note":"涨10%减半"},
  {"when":{"logic":"all","conditions":[{"logic":"all","conditions":[{"left":"dif","op":">","right":"dea"},{"left":"dif","op":"<=","right":"dea","lag":1,"right_lag":1}]}]},"action":"sell","size_pct":100,"max_times":null,"note":"MACD金叉清仓"}
 ]}
-risk 用 {"stop_loss_pct":8.0,"max_hold_days":null,"take_profit_pct":null}"""
+阶梯分批止盈示例（"涨10%卖1/3，涨20%清仓"）：
+{"rules":[
+ {"when":{"logic":"all","conditions":[{"left":"pnl_pct","op":">=","right":10}]},"action":"sell","size_pct":33.33,"max_times":1,"note":"涨10%卖1/3"},
+ {"when":{"logic":"all","conditions":[{"left":"pnl_pct","op":">=","right":20}]},"action":"sell","size_pct":100,"note":"涨20%清仓"}
+]}
+（清仓档可不设 max_times：清仓后持仓字段为 None 规则自然失效）
+risk 用 {"stop_loss_pct":8.0,"trailing_stop_pct":null,"max_hold_days":null,"take_profit_pct":null}"""
 
 _PROTOCOL = """输出协议（严格遵守）：
 每次只输出一个 JSON 对象，两种形态二选一：
@@ -115,7 +122,7 @@ SYSTEM_PROMPT = f"""你是A股量化策略架构师。任务：把用户的自�
 
 config 其余字段：
 - universe：{{"type":"index"|"sector"|"custom"|"all","code":"000300.SH","codes":[...]}}（index/sector需code，custom需codes，all=全市场）
-- risk：{{"stop_loss_pct":8.0,"max_hold_days":30,"take_profit_pct":null}}（null=禁用）
+- risk：{{"stop_loss_pct":8.0,"trailing_stop_pct":null,"max_hold_days":30,"take_profit_pct":null}}（null=禁用；trailing_stop_pct=移动止损%，自持仓期最高价回撤盘中触发）
 - backtest_defaults：{{"start":"2025-01-01","end":"<今天>","initial_cash":1000000,"position_pct":20,"max_positions":5,"fee_bps":2.5,"stamp_tax_bps":5.0}}
 - 注：v2 策略用 rules；entry/exit 是旧版兼容写法，不要再输出
 

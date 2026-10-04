@@ -159,6 +159,7 @@ class Universe(BaseModel):
 
 class RiskConfig(BaseModel):
     stop_loss_pct: Union[float, None] = Field(default=None, ge=0.5, le=50)
+    trailing_stop_pct: Union[float, None] = Field(default=None, ge=0.5, le=50)  # 移动止损：自持仓期最高价（盘中）回撤%
     max_hold_days: Union[int, None] = Field(default=None, ge=1, le=500)
     take_profit_pct: Union[float, None] = Field(default=None, ge=0.5, le=200)
 

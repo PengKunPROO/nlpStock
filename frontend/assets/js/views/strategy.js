@@ -229,8 +229,9 @@ function buildForm(cfg) {
   const r = cfg.risk || {};
   wrap.appendChild(h(`<div class="card">
     <div class="field-row">
-      <div class="field"><label>止损 %（空=禁用）</label><input id="f-stop" type="number" step="0.5" value="${r.stop_loss_pct ?? ''}"></div>
-      <div class="field"><label>止盈 %（空=禁用）</label><input id="f-tp" type="number" step="0.5" value="${r.take_profit_pct ?? ''}"></div>
+<div class="field"><label>止损 %（空=禁用）</label><input id="f-stop" type="number" step="0.5" value="${r.stop_loss_pct ?? ''}"></div>
+<div class="field"><label>移动止损 %（自最高点，空=禁用）</label><input id="f-trail" type="number" step="0.5" value="${r.trailing_stop_pct ?? ''}"></div>
+<div class="field"><label>止盈 %（空=禁用）</label><input id="f-tp" type="number" step="0.5" value="${r.take_profit_pct ?? ''}"></div>
       <div class="field"><label>最长持仓（日，空=禁用）</label><input id="f-hold" type="number" step="1" value="${r.max_hold_days ?? ''}"></div>
     </div>
   </div>`));
@@ -277,10 +278,11 @@ function collectForm(cfg) {
     else if (t.value === 'all') cfg.universe = { type: 'all' };
     else cfg.universe = { type: t.value, code: document.getElementById('f-uni-code').value };
   }
-  if (cfg.risk) {
-    cfg.risk.stop_loss_pct = num('f-stop') ?? null;
-    cfg.risk.take_profit_pct = num('f-tp') ?? null;
-    cfg.risk.max_hold_days = num('f-hold') ?? null;
+if (cfg.risk) {
+cfg.risk.stop_loss_pct = num('f-stop') ?? null;
+cfg.risk.trailing_stop_pct = num('f-trail') ?? null;
+cfg.risk.take_profit_pct = num('f-tp') ?? null;
+cfg.risk.max_hold_days = num('f-hold') ?? null;
   }
   if (cfg.backtest_defaults) {
     const bd = cfg.backtest_defaults;

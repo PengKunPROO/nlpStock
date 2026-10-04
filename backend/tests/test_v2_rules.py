@@ -215,3 +215,104 @@ def test_v2_hold_days_field():
     # 交易持有天数应约等于 5
     t = result["trades"][0]
     assert t["holding_days"] >= 5
+
+
+# ---------- 阶段3：移动止损（盘中 trailing stop） ----------
+
+TRAIL_RISK = {"stop_loss_pct": None, "trailing_stop_pct": 8, "max_hold_days": None, "take_profit_pct": None}
+BUY_RULE = {"when": {"logic": "all", "conditions": [{"left": "close", "op": ">", "right": "ma5"}]},
+            "action": "buy", "size_pct": 100, "max_times": 1, "note": "上穿买入"}
+_PRE = [10.0] * 10  # 无信号前缀（凑足 40 根 K 线 + 拉开信号与回测起点）
+
+
+def run_trail(closes, opens, lows=None, highs=None):
+    cfg = StrategyConfig.model_validate(rules_cfg([BUY_RULE], risk=TRAIL_RISK))
+    bars = bars_from_closes(_PRE + closes, opens=_PRE + opens,
+                            lows=_PRE + lows if lows else None, highs=_PRE + highs if highs else None)
+    data = FakeData({"600001.SH": bars})
+    return backtest(cfg, params(), data)
+
+
+def test_trailing_stop_intraday():
+    """盘中触发：峰值13.5 回撤8% → 止损价12.42，当日 low 跌破按止损价成交。"""
+    result = run_trail(
+        closes=[10.5, 11.0, 12.0, 13.0, 11.5],
+        opens=[10.5, 10.5, 11.5, 12.5, 13.0],
+        lows=[10.4, 10.4, 11.4, 12.4, 11.0],
+        highs=[10.6, 11.2, 12.0, 13.5, 13.2],
+    )
+    t = result["trades"][0]
+    assert t["exit_reason"] == "trailing_stop"
+    assert t["exit_price"] == pytest.approx(13.5 * 0.92, abs=0.001)  # 12.42
+    assert t["exit_evidence"]["trigger"].startswith("盘中最低")
+
+
+def test_trailing_stop_gap_open():
+    """跳空低开：开盘价 ≤ 移动止损价 → 按开盘价成交（保护性强制离场）。"""
+    result = run_trail(
+        closes=[10.5, 11.0, 12.0, 13.0, 12.2],
+        opens=[10.5, 10.5, 11.5, 12.5, 12.0],
+        lows=[10.4, 10.4, 11.4, 12.4, 11.8],
+        highs=[10.6, 11.2, 12.0, 13.5, 12.5],
+    )
+    t = result["trades"][0]
+    assert t["exit_reason"] == "trailing_stop"
+    assert t["exit_price"] == 12.0  # 跳空按开盘价
+    assert t["exit_evidence"]["trigger"].startswith("开盘价")
+
+
+def test_trailing_stop_no_future_peek():
+    """无未来函数：当日盘中新高不参与当日止损判定（用截至昨日的峰值）。
+
+    i2 当日冲高 20（若错误地用当日 high 计算止损价 18.4，low 11.5 会误触发）；
+    正确行为：i2 用昨日峰值 11.2 → 止损价 10.30，不触发；日终峰值更新为 20；
+    i3 止损价 18.4，开盘 17.0 跳空触发按 17.0 成交。
+    """
+    result = run_trail(
+        closes=[10.5, 11.0, 19.0, 16.5],
+        opens=[10.5, 10.5, 12.0, 17.0],
+        lows=[10.4, 10.4, 11.5, 16.0],
+        highs=[10.6, 11.2, 20.0, 17.5],
+    )
+    t = result["trades"][0]
+    assert t["exit_reason"] == "trailing_stop"
+    assert t["exit_price"] == 17.0  # 次日开盘成交，而非 i2 的 18.4
+
+
+def test_trailing_stop_schema_range():
+    """trailing_stop_pct 范围校验：[0.5, 50]，None=禁用。"""
+    cfg = StrategyConfig.model_validate(rules_cfg([BUY_RULE], risk=TRAIL_RISK))
+    assert cfg.risk.trailing_stop_pct == 8
+    with pytest.raises(Exception):
+        StrategyConfig.model_validate(rules_cfg([BUY_RULE], risk={**TRAIL_RISK, "trailing_stop_pct": 0.3}))
+
+
+# ---------- 阶段3：分批止盈阶梯（rules 表达法回归） ----------
+
+
+def test_scale_out_ladder():
+    """分批止盈阶梯：涨10%卖1/3 + 涨20%清仓 → 两笔卖出，max_times 防止第一档重复触发。"""
+    closes = _PRE + [10.5, 11.0, 11.6, 12.8, 12.8]
+    opens = _PRE + [10.5, 10.5, 11.5, 11.6, 12.8]
+    cfg = StrategyConfig.model_validate(rules_cfg([
+        {"when": {"logic": "all", "conditions": [{"left": "close", "op": ">", "right": "ma5"}]},
+         "action": "buy", "size_pct": 100, "max_times": 1, "note": "上穿买入"},
+        {"when": {"logic": "all", "conditions": [{"left": "pnl_pct", "op": ">=", "right": 10}]},
+         "action": "sell", "size_pct": 33.33, "max_times": 1, "note": "涨10%卖1/3"},
+        {"when": {"logic": "all", "conditions": [{"left": "pnl_pct", "op": ">=", "right": 20}]},
+         "action": "sell", "size_pct": 100, "note": "涨20%清仓"},
+    ]))
+    data = FakeData({"600001.SH": bars_from_closes(closes, opens=opens)})
+    result = backtest(cfg, params(), data)
+    # 买入 95200 股 @10.5；i2 收盘 11.6（pnl≈10.5%）→ i3 开盘卖 1/3 = 31700 股；
+    # i3 收盘 12.8（pnl≈21.9%）→ i4 开盘清仓剩余 63500 股。
+    # 清仓后 rule_counts 重置（每轮持仓独立计数），p3 收盘仍满足买入信号 → i4 开盘再入场，
+    # 尾段结束按 end_of_data 估值平仓。
+    trades = result["trades"]
+    assert len(trades) == 3
+    assert trades[0]["shares"] == 31700
+    assert trades[0]["exit_reason"] == "signal"
+    assert trades[1]["shares"] == 63500
+    assert trades[1]["exit_reason"] == "signal"
+    assert trades[2]["entry_date"] == trades[1]["exit_date"]  # 清仓同日再入场
+    assert trades[2]["exit_reason"] == "end_of_data"

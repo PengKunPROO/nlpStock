@@ -40,7 +40,7 @@
         { left: 'close', op: '<', right: 'box20', right_factor: 0.95, note: '离场：击穿箱体上沿5%（支撑失效）' },
       ],
     },
-    risk: { stop_loss_pct: 8.0, max_hold_days: 30, take_profit_pct: null },
+    risk: { stop_loss_pct: 8.0, trailing_stop_pct: null, max_hold_days: 30, take_profit_pct: null },
     backtest_defaults: { start: '2025-01-01', end: '2026-09-18', initial_cash: 1000000, position_pct: 20, max_positions: 5, fee_bps: 2.5, stamp_tax_bps: 5.0 },
   };
 

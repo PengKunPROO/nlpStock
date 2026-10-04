@@ -18,7 +18,7 @@ from .indicators import compute_indicators
 from .schema import HOLD_FIELDS, ConditionGroup
 from .screener import parse_as_of
 
-EXIT_PRIORITY = ("stop_loss", "take_profit", "signal", "max_hold")
+EXIT_PRIORITY = ("stop_loss", "take_profit", "trailing_stop", "signal", "max_hold")
 
 
 def _date_str(ms: int) -> str:
@@ -98,6 +98,7 @@ def backtest(
     tax_rate = float(params["stamp_tax_bps"]) / 10000.0
     stop_pct = cfg.risk.stop_loss_pct
     tp_pct = cfg.risk.take_profit_pct
+    trail_pct = cfg.risk.trailing_stop_pct
     max_hold = cfg.risk.max_hold_days
 
     universe = params.get("universe") or cfg.universe.model_dump()
@@ -241,6 +242,7 @@ def backtest(
                 "entry_evidence": entry_ev,
                 "rule_counts": {},
                 "peak_close": price,
+                "peak_high": price,
                 "hold_days": 0,
             }
         day_actions.append({
@@ -270,6 +272,8 @@ def backtest(
                 continue  # 买入当天不卖（T+1）
             stop = p["stop_price"]
             tp = p["tp_price"]
+            # 移动止损价：基于截至昨日的持仓期盘中最高价（当日新高先后顺序未知，用昨日峰值判定，无未来函数）
+            trail_stop = p["peak_high"] * (1 - trail_pct / 100) if trail_pct is not None else None
             reason = None
             price = None
             exit_ev: dict | None = None
@@ -277,12 +281,18 @@ def backtest(
                 reason, price, exit_ev = "stop_loss", op, {"trigger": f"开盘价 {op} ≤ 止损价 {stop}"}
             elif tp is not None and op >= tp:
                 reason, price, exit_ev = "take_profit", op, {"trigger": f"开盘价 {op} ≥ 止盈价 {tp}"}
+            elif trail_stop is not None and op <= trail_stop:
+                reason, price, exit_ev = "trailing_stop", op, {
+                    "trigger": f"开盘价 {op} ≤ 移动止损价 {trail_stop:.2f}（峰值 {p['peak_high']} 回撤 {trail_pct}%）"}
             elif max_hold is not None and (gidx - p["entry_gidx"]) >= max_hold:
                 reason, price, exit_ev = "max_hold", op, {"trigger": f"持仓 {gidx - p['entry_gidx']} 日 ≥ 最长 {max_hold} 日"}
             elif stop is not None and s.low[i] <= stop:
                 reason, price, exit_ev = "stop_loss", stop, {"trigger": f"盘中最低 {s.low[i]} ≤ 止损价 {stop}"}
             elif tp is not None and s.high[i] >= tp:
                 reason, price, exit_ev = "take_profit", tp, {"trigger": f"盘中最高 {s.high[i]} ≥ 止盈价 {tp}"}
+            elif trail_stop is not None and s.low[i] <= trail_stop:
+                reason, price, exit_ev = "trailing_stop", trail_stop, {
+                    "trigger": f"盘中最低 {s.low[i]} ≤ 移动止损价 {trail_stop:.2f}（峰值 {p['peak_high']} 回撤 {trail_pct}%）"}
             if reason:
                 sell(code, gidx, price, reason, d, exit_ev=exit_ev)
                 continue
@@ -336,6 +346,7 @@ def backtest(
                 if gidx > p["entry_gidx"]:
                     p["hold_days"] += 1
                 p["peak_close"] = max(p["peak_close"], s.last_close)
+                p["peak_high"] = max(p["peak_high"], s.high[s.date_idx[d]])
         value = cash + market_value()
         peak = max(peak, value)
         dd = (value / peak - 1) * 100 if peak else 0.0
