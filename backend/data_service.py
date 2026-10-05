@@ -1,10 +1,13 @@
 """Cache-aware data service: kline fetch/backfill, universe resolution, ticker sync."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from .fuyao import FuyaoClient, FuyaoError, CST, last_completed_trading_day, now_cst
 from .storage import Storage
 
 DAY_MS = 86_400_000
+CONSTITUENTS_TTL = timedelta(days=1)
 MAJOR_INDICES = [
     ("000001.SH", "上证指数"),
     ("399001.SZ", "深证成指"),
@@ -19,9 +22,7 @@ MAJOR_INDICES = [
 
 def _today_ms() -> int:
     n = now_cst()
-    from datetime import datetime as _dt
-
-    return int(_dt(n.year, n.month, n.day, tzinfo=CST).timestamp() * 1000)
+    return int(datetime(n.year, n.month, n.day, tzinfo=CST).timestamp() * 1000)
 
 
 class DataService:
@@ -140,11 +141,26 @@ class DataService:
         return t["name"] if t else None
 
     # ---- universes ----
+    def _constituents(self, code: str) -> list[dict]:
+        """Index/sector constituents with 1-day local cache; stale or missing => upstream pull."""
+        cached = self.storage.get_constituents(code)
+        updated_at = self.storage.get_constituents_updated_at(code)
+        if cached is not None and updated_at is not None:
+            try:
+                ts = datetime.fromisoformat(updated_at)
+            except ValueError:
+                ts = None
+            if ts is not None and datetime.now() - ts < CONSTITUENTS_TTL:
+                return cached
+        items = self.client.index_constituents(code)
+        self.storage.upsert_constituents(code, items)
+        return items
+
     def resolve_universe(self, universe: dict) -> tuple[list[str], dict[str, str], str]:
         utype = universe.get("type", "index")
         if utype in ("index", "sector"):
             code = universe["code"]
-            items = self.client.index_constituents(code)
+            items = self._constituents(code)
             codes = [i["thscode"] for i in items]
             names = {i["thscode"]: i["name"] for i in items}
             label = self.name_for(code) or code
@@ -167,3 +183,24 @@ class DataService:
             "indices": [{"code": c, "name": n, "count": None} for c, n in MAJOR_INDICES],
             "sectors": sectors,
         }
+
+    # ---- preheat ----
+    def preheat(self, universe: dict, progress_cb=None) -> int:
+        """Warm tickers/constituents caches before the first screen; returns rough stock count."""
+        utype = universe.get("type", "index")
+        if utype in ("index", "sector"):
+            codes, _, _ = self.resolve_universe(universe)
+            if progress_cb:
+                progress_cb(1, 1, universe.get("code") or "")
+            return len(codes)
+        if utype == "custom":
+            return len(list(universe.get("codes", [])))
+        self._ensure_tickers()
+        steps = 1 + len(MAJOR_INDICES)
+        if progress_cb:
+            progress_cb(1, steps, "tickers")
+        for i, (code, _name) in enumerate(MAJOR_INDICES):
+            self.resolve_universe({"type": "index", "code": code})
+            if progress_cb:
+                progress_cb(i + 2, steps, code)
+        return len(self.storage.all_tickers("a-share"))

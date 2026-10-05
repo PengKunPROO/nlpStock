@@ -28,6 +28,14 @@ CREATE TABLE IF NOT EXISTS jobs(
   id TEXT PRIMARY KEY, type TEXT NOT NULL, status TEXT NOT NULL,
   progress_json TEXT, result_json TEXT, error TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS index_constituents(
+  thscode TEXT PRIMARY KEY, updated_at TEXT NOT NULL, constituents_json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS backtest_analyses(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  trading_strategy_id INTEGER,
+  params_json TEXT,
+  result_json TEXT,
+  created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_klines_code ON klines(thscode);
 """
 
@@ -43,6 +51,10 @@ class Storage:
         self._write_lock = threading.Lock()
         with self._conn() as c:
             c.executescript(_SCHEMA)
+            # 幂等迁移：旧库 strategies 表无 type 列，补上（已存在则跳过）
+            cols = [r["name"] for r in c.execute("PRAGMA table_info(strategies)").fetchall()]
+            if "type" not in cols:
+                c.execute("ALTER TABLE strategies ADD COLUMN type TEXT NOT NULL DEFAULT 'screening'")
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.path, timeout=30)
@@ -73,12 +85,22 @@ class Storage:
         return self.get_settings()
 
     # ---- strategies ----
-    def create_strategy(self, config: dict) -> dict:
+    @staticmethod
+    def _resolve_type(type: str | None, config: dict) -> str:
+        """显式参数 > config['type'] > 形状推断（有 rules 无 entry 视为 trading）。"""
+        if type:
+            return type
+        if config.get("type"):
+            return config["type"]
+        return "trading" if "rules" in config and "entry" not in config else "screening"
+
+    def create_strategy(self, config: dict, type: str | None = None) -> dict:
         now = _now()
+        stype = self._resolve_type(type, config)
         with self._write_lock, self._conn() as c:
             cur = c.execute(
-                "INSERT INTO strategies(name, created_at, updated_at) VALUES(?, ?, ?)",
-                (config["name"], now, now),
+                "INSERT INTO strategies(name, type, created_at, updated_at) VALUES(?, ?, ?, ?)",
+                (config["name"], stype, now, now),
             )
             sid = cur.lastrowid
             c.execute(
@@ -87,8 +109,9 @@ class Storage:
             )
         return {"id": sid, "version": 1, "created_at": now, **config}
 
-    def update_strategy(self, sid: int, config: dict) -> dict:
+    def update_strategy(self, sid: int, config: dict, type: str | None = None) -> dict:
         now = _now()
+        stype = self._resolve_type(type, config)
         with self._write_lock, self._conn() as c:
             row = c.execute("SELECT MAX(version) AS v FROM strategy_versions WHERE strategy_id=?", (sid,)).fetchone()
             if row is None or row["v"] is None:
@@ -98,7 +121,10 @@ class Storage:
                 "INSERT INTO strategy_versions(strategy_id, version, config_json, created_at) VALUES(?, ?, ?, ?)",
                 (sid, version, json.dumps(config, ensure_ascii=False), now),
             )
-            c.execute("UPDATE strategies SET name=?, updated_at=? WHERE id=?", (config["name"], now, sid))
+            c.execute(
+                "UPDATE strategies SET name=?, type=?, updated_at=? WHERE id=?",
+                (config["name"], stype, now, sid),
+            )
         return {"id": sid, "version": version, "created_at": now, **config}
 
     def restore_version(self, sid: int, version: int) -> dict:
@@ -132,9 +158,29 @@ class Storage:
             "versions": [dict(v) for v in versions],
         }
 
-    def list_strategies(self) -> list[dict]:
+    @staticmethod
+    def _derive_counts(stype: str, cfg: dict) -> tuple[int, int]:
+        """按策略类型推导 entry/exit 条数：
+        screening → entry 条件数；trading → buy 规则数（补仓）/ sell 规则数（卖出）。"""
+        if stype == "trading":
+            rules = cfg.get("rules") or []
+            entry_count = sum(1 for r in rules if r.get("action") == "buy")
+            exit_count = sum(1 for r in rules if r.get("action") == "sell")
+        else:
+            entry = cfg.get("entry")
+            entry_count = len(entry.get("conditions", [])) if entry else 0
+            exit_count = 0
+        return entry_count, exit_count
+
+    def list_strategies(self, type: str | None = None) -> list[dict]:
+        q = "SELECT * FROM strategies"
+        args: list = []
+        if type is not None:
+            q += " WHERE type=?"
+            args.append(type)
+        q += " ORDER BY updated_at DESC"
         with self._conn() as c:
-            rows = c.execute("SELECT * FROM strategies ORDER BY updated_at DESC").fetchall()
+            rows = c.execute(q, args).fetchall()
         out = []
         for r in rows:
             with self._conn() as c2:
@@ -144,18 +190,10 @@ class Storage:
                 ).fetchall()
             latest = vrows[-1]
             cfg = json.loads(latest["config_json"])
-            rules = cfg.get("rules")
-            if cfg.get("entry"):
-                entry_count = len(cfg.get("entry", {}).get("conditions", []))
-                exit_count = len((cfg.get("exit") or {}).get("conditions", []))
-            elif rules is not None:
-                entry_count = sum(1 for r in rules if r.get("action") == "buy")
-                exit_count = sum(1 for r in rules if r.get("action") == "sell")
-            else:
-                entry_count = 0
-                exit_count = 0
+            entry_count, exit_count = self._derive_counts(r["type"], cfg)
             out.append({
                 "id": r["id"],
+                "type": r["type"],
                 "name": cfg.get("name", r["name"]),
                 "description": cfg.get("description", ""),
                 "version": latest["version"],
@@ -255,6 +293,32 @@ class Storage:
                 rows = c.execute("SELECT thscode, name, asset_type, exchange FROM tickers ORDER BY thscode").fetchall()
         return [dict(r) for r in rows]
 
+    # ---- index constituents ----
+    def get_constituents(self, thscode: str) -> list[dict] | None:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT constituents_json FROM index_constituents WHERE thscode=?", (thscode,)
+            ).fetchone()
+        if row is None:
+            return None
+        return json.loads(row["constituents_json"])
+
+    def get_constituents_updated_at(self, thscode: str) -> str | None:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT updated_at FROM index_constituents WHERE thscode=?", (thscode,)
+            ).fetchone()
+        return row["updated_at"] if row else None
+
+    def upsert_constituents(self, thscode: str, items: list[dict]) -> None:
+        with self._write_lock, self._conn() as c:
+            c.execute(
+                """INSERT INTO index_constituents(thscode, updated_at, constituents_json) VALUES(?,?,?)
+                   ON CONFLICT(thscode) DO UPDATE SET
+                     updated_at=excluded.updated_at, constituents_json=excluded.constituents_json""",
+                (thscode, _now(), json.dumps(items, ensure_ascii=False)),
+            )
+
     # ---- trading days ----
     def upsert_trading_days(self, items: list[dict]) -> None:
         rows = [(d["date_ms"], d["date"]) for d in items]
@@ -321,3 +385,44 @@ class Storage:
         out["progress"] = json.loads(out.pop("progress_json") or "null")
         out["result"] = json.loads(out.pop("result_json") or "null")
         return out
+
+    # ---- backtest analyses ----
+    @staticmethod
+    def _analysis_view(row) -> dict:
+        return {
+            "id": row["id"],
+            "trading_strategy_id": row["trading_strategy_id"],
+            "params": json.loads(row["params_json"] or "null"),
+            "result": json.loads(row["result_json"] or "null"),
+            "created_at": row["created_at"],
+        }
+
+    def save_analysis(self, trading_strategy_id: int, params: dict, result: dict) -> int:
+        with self._write_lock, self._conn() as c:
+            cur = c.execute(
+                """INSERT INTO backtest_analyses(trading_strategy_id, params_json, result_json, created_at)
+                   VALUES(?, ?, ?, ?)""",
+                (
+                    trading_strategy_id,
+                    json.dumps(params, ensure_ascii=False),
+                    json.dumps(result, ensure_ascii=False),
+                    _now(),
+                ),
+            )
+            return cur.lastrowid
+
+    def list_analyses(self, trading_strategy_id: int | None = None) -> list[dict]:
+        q = "SELECT * FROM backtest_analyses"
+        args: list = []
+        if trading_strategy_id is not None:
+            q += " WHERE trading_strategy_id=?"
+            args.append(trading_strategy_id)
+        q += " ORDER BY id"
+        with self._conn() as c:
+            rows = c.execute(q, args).fetchall()
+        return [self._analysis_view(r) for r in rows]
+
+    def get_analysis(self, aid: int) -> dict | None:
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM backtest_analyses WHERE id=?", (aid,)).fetchone()
+        return self._analysis_view(row) if row else None
