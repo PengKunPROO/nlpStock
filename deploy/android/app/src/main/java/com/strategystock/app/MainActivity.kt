@@ -41,8 +41,12 @@ class MainActivity : Activity() {
             val filesDir = filesDir.absolutePath
             val frontendDir = "$filesDir/frontend"
             copyAssetsFrontend(frontendDir)
-            val port = py.getModule("main").callAttr("start_server", filesDir, frontendDir).toInt()
-            loadWhenReady(port)
+            // 阻塞：uvicorn 的 asyncio 事件循环必须在 Python 主线程（本线程）运行，
+            // 否则 Android 的 SelectorEventLoop 会报 set_wakeup_fd 错误（见 main.py 注释）
+            py.getModule("main").callAttr("start_server", filesDir, frontendDir)
+        }
+        thread(name = "wait-ready") {
+            loadWhenReady()  // 后台轮询健康检查，通了再切主线程 loadUrl（避免主线程 sleep 导致 ANR）
         }
     }
 
@@ -75,10 +79,10 @@ class MainActivity : Activity() {
         }
     }
 
-    /** 等后端就绪（首次启动含 pip 包加载 + SQLite 初始化），最多 20s，之后加载页面。 */
-    private fun loadWhenReady(port: Int) {
-        val base = "http://127.0.0.1:$port"
-        for (i in 0..99) {
+    /** 等后端就绪（首次启动含 Python 初始化 + SQLite），最多 30s，之后加载页面。 */
+    private fun loadWhenReady() {
+        val base = "http://127.0.0.1:8123"  // 与 main.py 的 _PORT 一致
+        for (i in 0..149) {
             try {
                 val conn = URL("$base/api/health").openConnection() as HttpURLConnection
                 conn.connectTimeout = 300
