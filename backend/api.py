@@ -1,6 +1,8 @@
 """FastAPI routes: settings, strategy alignment/CRUD, screening/backtest jobs, kline, search, analyses."""
 from __future__ import annotations
 
+import re
+
 from typing import Any, Optional, Union
 
 from fastapi import FastAPI, Request
@@ -193,11 +195,11 @@ def register_routes(app: FastAPI, core: Core) -> None:
         s = core.settings()
         updates: dict = {}
         if body.fuyao_api_key is not None:
-            updates["fuyao_api_key"] = body.fuyao_api_key.strip()
+            updates["fuyao_api_key"] = re.sub(r"[^\x20-\x7e]", "", body.fuyao_api_key).strip()
         if body.llm_base_url is not None:
             updates["llm_base_url"] = body.llm_base_url.strip() or "https://api.deepseek.com"
         if body.llm_api_key is not None:
-            updates["llm_api_key"] = body.llm_api_key.strip()
+            updates["llm_api_key"] = re.sub(r"[^\x20-\x7e]", "", body.llm_api_key).strip()
         if body.llm_model is not None:
             updates["llm_model"] = body.llm_model.strip() or "deepseek-chat"
         if body.default_universe is not None:

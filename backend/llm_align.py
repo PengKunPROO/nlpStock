@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import ssl
 import time
 from typing import Any
@@ -256,6 +257,8 @@ class DeepSeekAligner:
         network_retries: int = 2,
         retry_delay: float = 1.0,
     ):
+        # 清洗 key：去掉非 ascii 可打印字符（全角冒号/中文标点等），避免 httpx header 编码失败
+        api_key = re.sub(r"[^\x20-\x7e]", "", api_key).strip()
         self.base_url = base_url.rstrip("/")
         if self.base_url.endswith("/chat/completions"):
             self.base_url = self.base_url[: -len("/chat/completions")]

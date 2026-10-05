@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,8 @@ class FuyaoClient:
         retry_delay: float = 1.0,
         transport: httpx.BaseTransport | None = None,
     ):
+        # 清洗 key：去掉非 ascii 可打印字符（全角冒号/中文标点等），避免 httpx header 编码失败
+        api_key = re.sub(r"[^\x20-\x7e]", "", api_key).strip()
         self.base_url = base_url.rstrip("/")
         self.min_interval = min_interval
         self.max_retries = max_retries
