@@ -27,21 +27,17 @@ APK（Chaquopy：Python 3.10 解释器 + backend/ 源码 + pip 依赖）
 | 工具 | 版本 | 说明 |
 |---|---|---|
 | JDK | 17 | `java -version` 确认 |
-| Android SDK | Platform 35 + Build-Tools | Android Studio → SDK Manager |
-| Gradle | 8.9+（wrapper 生成，见下） | |
+| Android SDK | Platform 35 + Build-Tools | Android Studio → SDK Manager（构建时 AGP 可自动补装缺失 platform） |
+| Gradle | 8.11.1（wrapper 已随仓库提交） | 无需单独安装 gradle |
 | Node.js | 不需要 | 前端无构建步骤 |
 
 ## 构建步骤
 
 ```bash
-# 0) 生成 gradle wrapper（仅首次；装了 Android Studio 的机器在 AS 里打开工程也可自动处理）
 cd deploy/android
-gradle wrapper --gradle-version 8.9        # 若本机无 gradle：从任意已有 gradle 工程复制 gradle/wrapper + gradlew*
+gradlew.bat assembleDebug     # wrapper 已随仓库提交，clone 即可构建（首次约 2~10 分钟）
 
-# 1) 构建（首次约 10~20 分钟：下载 AGP/Chaquopy + pip 拉依赖 + 编 Python）
-gradlew.bat assembleDebug
-
-# 2) 安装到手机
+# 安装到手机
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
