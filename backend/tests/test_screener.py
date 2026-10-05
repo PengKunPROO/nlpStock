@@ -155,3 +155,32 @@ def test_parse_as_of():
     assert ms % 86_400_000 == 16 * 3600 * 1000  # CST midnight == UTC 16:00 previous day
     with pytest.raises(ValueError):
         parse_as_of("2026/06/30")
+
+
+def test_screen_v2_rules_strategy():
+    """v2 rules 策略（entry/exit 为 None）选股不崩 + 正确匹配开仓规则。"""
+    cfg = StrategyConfig.parse_obj({
+        "name": "v2 rules 选股",
+        "universe": {"type": "custom", "codes": ["600001.SH", "600002.SH"]},
+        "indicators": [{"id": "ma20", "kind": "MA", "of": "close", "n": 20}],
+        "rules": [
+            {"when": {"logic": "all", "conditions": [{"left": "close", "op": ">", "right": "ma20", "note": "站上20日线"}]},
+             "action": "buy", "size_pct": 100, "note": "站上买入"},
+            {"when": {"logic": "all", "conditions": [{"left": "close", "op": "<", "right": "ma20"}]},
+             "action": "sell", "size_pct": 100, "note": "跌破卖出"},
+            {"when": {"logic": "all", "conditions": [{"left": "pnl_pct", "op": "<=", "right": -5}]},
+             "action": "buy", "size_pct": 30, "max_times": 1, "note": "跌5%补仓（持仓期，不应作开仓）"},
+        ],
+        "risk": {"stop_loss_pct": None, "trailing_stop_pct": None, "max_hold_days": None, "take_profit_pct": None},
+        "backtest_defaults": {"start": "2025-01-01", "end": "2025-12-31", "initial_cash": 1000000,
+                              "position_pct": 20, "max_positions": 5, "fee_bps": 2.5, "stamp_tax_bps": 5.0},
+    })
+    data = FakeData({
+        "600001.SH": make_bars(60, drift=0.2),  # 上升 → close > ma20 → 命中
+        "600002.SH": make_bars(60, drift=0.0),  # 走平 → close ≈ ma20 → 不命中
+    })
+    result = screen(cfg, data)
+    assert result["evaluated"] == 2 and result["failed"] == 0
+    assert result["matched_count"] == 1
+    assert result["matched"][0]["thscode"] == "600001.SH"
+    assert result["matched"][0]["signals"] == ["站上20日线"]

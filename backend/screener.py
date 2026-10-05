@@ -9,9 +9,23 @@ from .conditions import eval_condition
 from .data_service import DataService
 from .fuyao import CST
 from .indicators import compute_indicators
-from .schema import ConditionGroup, LeafCondition, StrategyConfig
+from .schema import HOLD_FIELDS, ConditionGroup, LeafCondition, StrategyConfig
 
 MIN_BARS = 30
+
+
+def _refs_hold(group: ConditionGroup) -> bool:
+    """条件组是否引用持仓状态字段（cost/pnl_pct/hold_days/dd_from_peak）。"""
+    for c in group.conditions:
+        if isinstance(c, ConditionGroup):
+            if _refs_hold(c):
+                return True
+        else:
+            if c.left in HOLD_FIELDS:
+                return True
+            if isinstance(c.right, str) and c.right in HOLD_FIELDS:
+                return True
+    return False
 
 
 def parse_as_of(as_of: str | None) -> int | None:
@@ -49,8 +63,9 @@ def _referenced_ids(cfg: StrategyConfig) -> list[str]:
                     ids.add(c.right)
 
     cfg_ids = {ind.id for ind in cfg.indicators}
-    walk(cfg.entry.conditions)
-    walk(cfg.exit.conditions)
+    # v2：遍历 rules 的 when 条件（v1 entry/exit 已由兼容层转成 rules）
+    for rule in cfg.rules or []:
+        walk(rule.when.conditions)
     return sorted(ids)
 
 
@@ -90,6 +105,8 @@ def screen(
     codes, names, label = data.resolve_universe(cfg.universe.dict())
     specs = cfg.indicators
     ref_ids = _referenced_ids(cfg)
+    # v2 选股 = 评估开仓规则（buy 且不引用持仓状态字段），等价 v1 的 entry
+    open_rules = [r for r in (cfg.rules or []) if r.action == "buy" and not _refs_hold(r.when)]
 
     # 大盘基准（沪深300）：信号追踪对照
     benchmark_closes: list[tuple[int, float]] = []
@@ -136,7 +153,12 @@ def screen(
             i = len(bars) - 1
         series = compute_indicators(bars[: i + 1], specs)
         notes: list[str] = []
-        if not _collect_matched(cfg.entry, series, i, notes):
+        hit = False
+        for rule in open_rules:  # 任一开仓规则命中即入选
+            if _collect_matched(rule.when, series, i, notes):
+                hit = True
+                break
+        if not hit:
             return None
         snapshot = {"close": round(bars[i]["close"], 4)}
         for rid in ref_ids:
