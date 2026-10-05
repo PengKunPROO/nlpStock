@@ -9,6 +9,7 @@ const PERIODS = [
 ];
 const maVisible = { ma5: true, ma10: true, ma20: true, ma60: true };
 let cleanupFn = null;
+let selectedIdx = null; // 当前浮层对应的 K 线索引（null = 浮层关闭）
 
 export async function renderChartView(view) {
   const code = state.chartCode || '600519.SH';
@@ -124,9 +125,25 @@ async function loadChart(code, period, silent = false) {
       <span class="${trendChip}" style="font-weight:600">${esc(vs.trend || '量能平稳')}</span>
       <span class="muted" style="font-size:12px;margin-left:8px">${esc(vs.note || '')}</span>`;
     if (cleanupFn) cleanupFn();
+    hideTip();
+    selectedIdx = null;
     cleanupFn = renderKline(canvas, data.bars, {
       ...maVisible,
-      onBarTap: (bar, idx, pos, width) => showTip(tip, bar, pos, width),
+      onBarTap: (bar, idx, pos, width) => {
+        if (idx === selectedIdx) {
+          // 再次点击同一根 K 线：切换关闭浮层
+          selectedIdx = null;
+          hideTip();
+          return false; // 通知 kline 不要绘制高亮虚线
+        }
+        selectedIdx = idx;
+        showTip(tip, bar, pos, width);
+      },
+      onBlankTap: () => {
+        // 点击 K 线 canvas 的空白区域（图身之外）
+        selectedIdx = null;
+        hideTip();
+      },
     });
   } catch (e) {
     head.innerHTML = `<div class="empty" style="padding:18px">加载失败：${esc(e.message || String(e))}
@@ -160,3 +177,18 @@ function showTip(tip, bar, pos, width) {
   tip.style.left = flip ? 'auto' : `${Math.max(4, pos.x + 14)}px`;
   tip.style.right = flip ? `${Math.max(4, width - pos.x + 14)}px` : 'auto';
 }
+
+function hideTip() {
+  const tip = document.getElementById('kline-tip');
+  if (tip) tip.style.display = 'none';
+}
+
+// 点击浮层外任意位置关闭（浮层内部点击、K 线 canvas 点击除外——后者由 kline 的 onBarTap/onBlankTap 处理）
+document.addEventListener('pointerdown', (e) => {
+  const tip = document.getElementById('kline-tip');
+  if (!tip || tip.style.display === 'none') return;
+  if (tip.contains(e.target)) return;
+  if (e.target instanceof Element && e.target.closest('#kline-canvas')) return;
+  selectedIdx = null;
+  hideTip();
+});

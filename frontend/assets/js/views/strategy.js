@@ -7,6 +7,34 @@ const EXAMPLE_TEXT = '1，阴跌之后等急跌，\n2，急跌之后等止跌，
 
 let alignMessages = []; // 对齐对话历史（模块级，切tab保留）
 
+const TYPE_TABS = [
+  { v: 'screening', label: '选股策略' },
+  { v: 'trading', label: '交易策略' },
+];
+const typeLabel = (t) => (t === 'trading' ? '交易' : '选股');
+
+function currentType(view) {
+  const t = view.dataset.stratType;
+  return t === 'trading' ? 'trading' : 'screening';
+}
+
+function renderTypeSeg(view) {
+  const seg = document.getElementById('type-seg');
+  if (!seg) return;
+  seg.innerHTML = '';
+  const cur = currentType(view);
+  for (const t of TYPE_TABS) {
+    const b = h(`<button class="${t.v === cur ? 'active' : ''}">${t.label}</button>`);
+    b.onclick = () => {
+      if (t.v === cur) return;
+      view.dataset.stratType = t.v;
+      alignMessages = [];
+      go('list');
+    };
+    seg.appendChild(b);
+  }
+}
+
 export async function renderStrategyView(view) {
   const sub = view.dataset.sub || 'list';
   view.classList.toggle('chat-mode', sub === 'new');
@@ -25,12 +53,15 @@ function go(sub, extra = {}) {
 
 // ---------------- list ----------------
 async function renderList(view) {
+  const type = currentType(view);
+  const tLabel = typeLabel(type);
   view.innerHTML = '<div class="spinner"></div>';
   let items = [];
   try {
-    items = (await api.listStrategies()).items;
+    items = (await api.listStrategies(type)).items;
   } catch (e) {
-    view.innerHTML = `<div class="card"><div class="empty">加载失败：${esc(e.message)}</div></div>`;
+    view.innerHTML = `<div class="seg" id="type-seg"></div><div class="card"><div class="empty">加载失败：${esc(e.message)}</div></div>`;
+    renderTypeSeg(view);
     return;
   }
   const cards = items.map((s) => `
@@ -43,14 +74,17 @@ async function renderList(view) {
         <span class="chip accent" style="flex-shrink:0">v${s.version}</span>
       </div>
       <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
-        <span class="chip">入场 ${s.entry_count} 条</span>
-        <span class="chip">离场 ${s.exit_count} 条</span>
+        ${s.type === 'trading'
+          ? `<span class="chip">买 ${s.entry_count} 条</span><span class="chip">卖 ${s.exit_count} 条</span>`
+          : `<span class="chip">入场 ${s.entry_count} 条</span>`}
         <span class="chip">${esc((s.updated_at || '').slice(0, 10))}</span>
       </div>
     </div>`).join('');
   view.innerHTML = `
-    <button class="btn" id="new-strategy" style="margin-bottom:14px">＋ 新建策略（自然语言）</button>
-    ${items.length ? cards : '<div class="card"><div class="empty">还没有策略。<br>用一句自然语言描述你的交易思路，AI 会帮你量化。</div></div>'}`;
+    <div class="seg" id="type-seg"></div>
+    <button class="btn" id="new-strategy" style="margin-bottom:14px">＋ 新建${tLabel}策略（自然语言）</button>
+    ${items.length ? cards : `<div class="card"><div class="empty">还没有${tLabel}策略。<br>用一句自然语言描述你的${tLabel === '选股' ? '选股思路' : '交易规则'}，AI 会帮你量化。</div></div>`}`;
+  renderTypeSeg(view);
   document.getElementById('new-strategy').onclick = () => { alignMessages = []; go('new'); };
   view.querySelectorAll('[data-sid]').forEach((el) => {
     el.onclick = () => go('detail', { sid: el.dataset.sid });
@@ -59,25 +93,34 @@ async function renderList(view) {
 
 // ---------------- chat alignment ----------------
 function renderChat(view) {
+  const type = currentType(view);
+  const tLabel = typeLabel(type);
   view.innerHTML = `
+    <div class="seg" id="type-seg"></div>
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-        <span class="chip accent">AI 对齐</span>
+        <span class="chip accent">AI 对齐 · ${tLabel}</span>
         <span class="link" style="font-size:13px" id="back-list">← 返回列表</span>
       </div>
-      <div class="hint">用自然语言描述你的策略。AI 会先复述它的量化理解，并向你追问模糊点（均线、阈值、止损等），对齐完成后生成可审查的量化配置。</div>
+      <div class="hint">${type === 'screening'
+        ? '用自然语言描述你的选股策略。AI 会先复述它的量化理解，并向你追问模糊点（均线、阈值、止损等），对齐完成后生成可审查的量化配置。'
+        : '用自然语言描述你的交易规则。AI 会先复述它的量化理解，并向你追问模糊点（仓位、补仓、止盈止损等），对齐完成后生成可审查的规则配置。'}</div>
     </div>
     <div class="chat" id="chat-list"></div>
     <div class="chat-input">
-      <textarea id="chat-input" placeholder="描述你的策略，例如：阴跌之后等急跌……"></textarea>
+      <textarea id="chat-input" placeholder="${type === 'screening' ? '描述你的策略，例如：阴跌之后等急跌……' : '描述交易规则，例如：回踩不破买，浮亏5%补一次，涨8%卖一半……'}"></textarea>
       <button class="send-btn" id="chat-send" title="发送">↑</button>
     </div>
-    <div style="text-align:center;margin-top:8px"><span class="chip" style="cursor:pointer" id="fill-example">填入示例策略</span></div>
+    ${type === 'screening' ? '<div style="text-align:center;margin-top:8px"><span class="chip" style="cursor:pointer" id="fill-example">填入示例策略</span></div>' : ''}
   `;
+  renderTypeSeg(view);
   document.getElementById('back-list').onclick = () => go('list');
-  document.getElementById('fill-example').onclick = () => {
-    document.getElementById('chat-input').value = EXAMPLE_TEXT;
-  };
+  const fillBtn = document.getElementById('fill-example');
+  if (fillBtn) {
+    fillBtn.onclick = () => {
+      document.getElementById('chat-input').value = EXAMPLE_TEXT;
+    };
+  }
   const list = document.getElementById('chat-list');
   const input = document.getElementById('chat-input');
   const sendBtn = document.getElementById('chat-send');
@@ -101,7 +144,9 @@ function renderChat(view) {
       else appendBubble('ai', m.html || esc(m.content));
     }
     if (!alignMessages.length) {
-      appendBubble('ai', '你好，我是策略量化助手。<br>请描述你的交易策略 —— 越具体越好（哪些均线、大致幅度、止损偏好等）。也可以直接点下方「填入示例策略」。');
+      appendBubble('ai', type === 'trading'
+        ? '你好，我是交易策略量化助手。<br>请描述你的交易规则 —— 建仓条件、仓位管理（补仓/加仓）、卖出条件（止盈/止损/移动止损）等，越具体越好。'
+        : '你好，我是选股策略量化助手。<br>请描述你的选股策略 —— 越具体越好（哪些均线、大致幅度、止损偏好等）。也可以直接点下方「填入示例策略」。');
     }
   };
   renderHistory();
@@ -116,7 +161,7 @@ function renderChat(view) {
     let typing;
     try {
       typing = showTyping();
-      const resp = await api.parseStrategy(alignMessages.map(({ role, content }) => ({ role, content })));
+      const resp = await api.parseStrategy(alignMessages.map(({ role, content }) => ({ role, content })), type);
       if (typing) typing.remove();
       if (resp.type === 'clarify') {
         const qHtml = `<div class="q-title">当前量化理解</div>${esc(resp.understanding || '')}<div class="q-title" style="margin-top:8px">请确认 ${resp.round}/4</div><ol>${resp.questions.map((q) => `<li>${esc(q)}</li>`).join('')}</ol>`;
@@ -152,18 +197,24 @@ function renderChat(view) {
 function renderReview(view) {
   const cfg = state.draftConfig;
   if (!cfg) { go('list'); return; }
+  const type = currentType(view);
+  const tLabel = typeLabel(type);
   let jsonMode = false;
   view.innerHTML = `
+    <div class="seg" id="type-seg"></div>
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <span class="chip accent">审查 · ${cfg.parse_engine === 'llm' ? 'AI 生成' : '草稿'}</span>
+        <span class="chip accent">审查 · ${tLabel} · ${cfg.parse_engine === 'llm' ? 'AI 生成' : '草稿'}</span>
         <span class="link" style="font-size:13px" id="review-json-toggle">JSON 模式</span>
       </div>
-      <div class="hint">以下是 AI 量化的策略配置。<b>每条条件旁的灰字是对应你的原话</b>，数字均可修改；确认无误后保存。保存后仍可继续修改（自动存版本）。</div>
+      <div class="hint">${type === 'screening'
+        ? '以下是 AI 量化的选股策略配置。<b>每条条件旁的灰字是对应你的原话</b>，数字均可修改；确认无误后保存。保存后仍可继续修改（自动存版本）。'
+        : '以下是 AI 量化的交易策略配置。<b>每条规则旁的灰字是对应你的原话</b>，仓位、阈值与风控参数均可修改；确认无误后保存。保存后仍可继续修改（自动存版本）。'}</div>
     </div>
     <div id="review-body"></div>
     <button class="btn" id="save-draft" style="margin-top:4px">保存策略</button>
   `;
+  renderTypeSeg(view);
 
   const body = document.getElementById('review-body');
   const renderBody = () => {
@@ -185,7 +236,7 @@ function renderReview(view) {
       return;
     }
     body.innerHTML = '';
-    body.appendChild(buildForm(cfg));
+    body.appendChild(buildForm(cfg, type));
   };
   document.getElementById('review-json-toggle').onclick = () => { jsonMode = !jsonMode; renderBody(); };
   renderBody();
@@ -193,7 +244,7 @@ function renderReview(view) {
   document.getElementById('save-draft').onclick = async (ev) => {
     ev.target.disabled = true;
     try {
-      await api.createStrategy(state.draftConfig);
+      await api.createStrategy(state.draftConfig, type);
       toast('策略已保存');
       state.draftConfig = null;
       go('list');
@@ -204,30 +255,37 @@ function renderReview(view) {
   };
 }
 
-function buildForm(cfg) {
+function buildForm(cfg, type) {
   const wrap = h('<div></div>');
-  const info = h(`<div class="card">
+  wrap.appendChild(h(`<div class="card">
     <div class="field"><label>策略名称</label><input id="f-name" type="text" value="${esc(cfg.name)}"></div>
     <div class="field"><label>描述</label><textarea id="f-desc">${esc(cfg.description || '')}</textarea></div>
-  </div>`);
-  wrap.appendChild(info);
+  </div>`));
 
-  wrap.appendChild(h(`<div class="section-title">股票池</div>`));
-  wrap.appendChild(universeCard(cfg));
+  const indicatorsSection = () => {
+    wrap.appendChild(h(`<div class="section-title">指标（${cfg.indicators.length}）</div>`));
+    const indCard = h('<div class="card" id="ind-list"></div>');
+    for (const ind of cfg.indicators) {
+      indCard.appendChild(indRow(ind, cfg));
+    }
+    wrap.appendChild(indCard);
+  };
 
-  wrap.appendChild(h(`<div class="section-title">指标（${cfg.indicators.length}）</div>`));
-  const indCard = h('<div class="card" id="ind-list"></div>');
-  for (const ind of cfg.indicators) {
-    indCard.appendChild(indRow(ind, cfg));
-  }
-  wrap.appendChild(indCard);
+  if (type === 'screening') {
+    if (!cfg.entry) cfg.entry = { logic: 'all', conditions: [] };
+    wrap.appendChild(h(`<div class="section-title">股票池</div>`));
+    wrap.appendChild(universeCard(cfg));
+    indicatorsSection();
+    wrap.appendChild(h(`<div class="section-title">入场条件（${cfg.entry.logic === 'all' ? '全部满足' : '任一满足'}才出信号）</div>`));
+    wrap.appendChild(entryCard(cfg));
+  } else {
+    indicatorsSection();
+    wrap.appendChild(h(`<div class="section-title">交易规则（${(cfg.rules || []).length} 条）</div>`));
+    wrap.appendChild(ruleCard(cfg));
 
-  wrap.appendChild(h(`<div class="section-title">交易规则（${(cfg.rules || []).length} 条）</div>`));
-  wrap.appendChild(ruleCard(cfg));
-
-  wrap.appendChild(h(`<div class="section-title">风控</div>`));
-  const r = cfg.risk || {};
-  wrap.appendChild(h(`<div class="card">
+    wrap.appendChild(h(`<div class="section-title">风控</div>`));
+    const r = cfg.risk || {};
+    wrap.appendChild(h(`<div class="card">
     <div class="field-row">
 <div class="field"><label>止损 %（空=禁用）</label><input id="f-stop" type="number" step="0.5" value="${r.stop_loss_pct ?? ''}"></div>
 <div class="field"><label>移动止损 %（自最高点，空=禁用）</label><input id="f-trail" type="number" step="0.5" value="${r.trailing_stop_pct ?? ''}"></div>
@@ -236,9 +294,9 @@ function buildForm(cfg) {
     </div>
   </div>`));
 
-  const bd = cfg.backtest_defaults || {};
-  wrap.appendChild(h(`<div class="section-title">回测默认参数</div>`));
-  wrap.appendChild(h(`<div class="card">
+    const bd = cfg.backtest_defaults || {};
+    wrap.appendChild(h(`<div class="section-title">回测默认参数</div>`));
+    wrap.appendChild(h(`<div class="card">
     <div class="field-row">
       <div class="field"><label>开始</label><input id="f-bt-start" type="date" value="${esc(bd.start || '')}"></div>
       <div class="field"><label>结束</label><input id="f-bt-end" type="date" value="${esc(bd.end || '')}"></div>
@@ -249,18 +307,19 @@ function buildForm(cfg) {
       <div class="field"><label>最大持仓数</label><input id="f-maxpos" type="number" value="${bd.max_positions ?? 5}"></div>
     </div>
   </div>`));
+  }
 
   // gather on save-draft click: bind a collector
   const saveBtn = document.getElementById('save-draft');
   const origOnclick = saveBtn.onclick;
   saveBtn.onclick = async (ev) => {
-    collectForm(cfg);
+    collectForm(cfg, type);
     await origOnclick(ev);
   };
   return wrap;
 }
 
-function collectForm(cfg) {
+function collectForm(cfg, type) {
   const num = (id) => {
     const el = document.getElementById(id);
     if (!el) return undefined;
@@ -269,29 +328,65 @@ function collectForm(cfg) {
   };
   cfg.name = document.getElementById('f-name')?.value?.trim() || cfg.name;
   cfg.description = document.getElementById('f-desc')?.value ?? cfg.description;
-  // v2 统一用 rules：删除旧 entry/exit 兼容字段，避免冗余
-  delete cfg.entry;
-  delete cfg.exit;
-  const t = document.getElementById('f-uni-type');
-  if (t) {
-    if (t.value === 'custom') cfg.universe = { type: 'custom', codes: (document.getElementById('f-uni-codes').value.match(/[0-9A-Z]+\.(SH|SZ|BJ|TI)/g)) || [] };
-    else if (t.value === 'all') cfg.universe = { type: 'all' };
-    else cfg.universe = { type: t.value, code: document.getElementById('f-uni-code').value };
+  if (type === 'screening') {
+    // 选股策略：{name, universe, indicators, entry}，entry 保留
+    delete cfg.rules;
+    delete cfg.exit;
+    delete cfg.risk;
+    delete cfg.backtest_defaults;
+    const t = document.getElementById('f-uni-type');
+    if (t) {
+      if (t.value === 'custom') cfg.universe = { type: 'custom', codes: (document.getElementById('f-uni-codes').value.match(/[0-9A-Z]+\.(SH|SZ|BJ|TI)/g)) || [] };
+      else if (t.value === 'all') cfg.universe = { type: 'all' };
+      else cfg.universe = { type: t.value, code: document.getElementById('f-uni-code').value };
+    }
+  } else {
+    // 交易策略：{name, indicators, rules, risk, backtest_defaults}
+    delete cfg.entry;
+    delete cfg.exit;
+    delete cfg.universe;
+    if (cfg.risk) {
+      cfg.risk.stop_loss_pct = num('f-stop') ?? null;
+      cfg.risk.trailing_stop_pct = num('f-trail') ?? null;
+      cfg.risk.take_profit_pct = num('f-tp') ?? null;
+      cfg.risk.max_hold_days = num('f-hold') ?? null;
+    }
+    if (cfg.backtest_defaults) {
+      const bd = cfg.backtest_defaults;
+      if (document.getElementById('f-bt-start')) bd.start = document.getElementById('f-bt-start').value;
+      if (document.getElementById('f-bt-end')) bd.end = document.getElementById('f-bt-end').value;
+      bd.initial_cash = num('f-cash') ?? bd.initial_cash;
+      bd.position_pct = num('f-pos') ?? bd.position_pct;
+      bd.max_positions = num('f-maxpos') ?? bd.max_positions;
+    }
   }
-if (cfg.risk) {
-cfg.risk.stop_loss_pct = num('f-stop') ?? null;
-cfg.risk.trailing_stop_pct = num('f-trail') ?? null;
-cfg.risk.take_profit_pct = num('f-tp') ?? null;
-cfg.risk.max_hold_days = num('f-hold') ?? null;
-  }
-  if (cfg.backtest_defaults) {
-    const bd = cfg.backtest_defaults;
-    if (document.getElementById('f-bt-start')) bd.start = document.getElementById('f-bt-start').value;
-    if (document.getElementById('f-bt-end')) bd.end = document.getElementById('f-bt-end').value;
-    bd.initial_cash = num('f-cash') ?? bd.initial_cash;
-    bd.position_pct = num('f-pos') ?? bd.position_pct;
-    bd.max_positions = num('f-maxpos') ?? bd.max_positions;
-  }
+}
+
+// 入场条件组编辑器：选股策略的 entry（ConditionGroup，可嵌套分组）
+function entryCard(cfg) {
+  if (!cfg.entry) cfg.entry = { logic: 'all', conditions: [] };
+  const card = h('<div class="card" id="entry-list"></div>');
+  const render = () => {
+    card.innerHTML = '';
+    const g = cfg.entry;
+    const logicRow = h(`<div class="parts" style="margin-bottom:8px">
+      <select data-k="logic">
+        <option value="all" ${g.logic === 'all' ? 'selected' : ''}>全部满足</option>
+        <option value="any" ${g.logic === 'any' ? 'selected' : ''}>任一满足</option>
+      </select>
+      <span class="muted" style="font-size:12px">入场信号：${g.logic === 'all' ? '全部条件' : '任一条件'}成立即命中</span>
+    </div>`);
+    card.appendChild(logicRow);
+    const condsEl = h('<div class="entry-conds"></div>');
+    card.appendChild(condsEl);
+    renderGroupConditions(condsEl, g, cfg);
+    logicRow.querySelector('[data-k="logic"]').onchange = (e) => {
+      g.logic = e.target.value;
+      logicRow.querySelector('.muted').textContent = `入场信号：${g.logic === 'all' ? '全部条件' : '任一条件'}成立即命中`;
+    };
+  };
+  render();
+  return card;
 }
 
 function universeCard(cfg) {
@@ -411,6 +506,26 @@ function ruleCard(cfg) {
   return card;
 }
 
+// 条件组编辑器（可嵌套分组）：ruleRow 的 when 与选股策略的 entry 共用
+function renderGroupConditions(condsEl, g, cfg) {
+  condsEl.innerHTML = '';
+  for (const c of g.conditions) {
+    if (c.conditions) {
+      const grp = h(`<div class="cond cond-group"><div class="note">组合（${c.logic === 'all' ? '全部满足' : '任一满足'}）${c.note ? ' · ' + esc(c.note) : ''}</div></div>`);
+      for (const leaf of c.conditions) grp.appendChild(leafRow(leaf, cfg, c.conditions));
+      const delg = h('<button class="del" style="float:right">✕ 删除组</button>');
+      delg.onclick = () => { g.conditions = g.conditions.filter((x) => x !== c); renderGroupConditions(condsEl, g, cfg); };
+      grp.appendChild(delg);
+      condsEl.appendChild(grp);
+    } else {
+      condsEl.appendChild(leafRow(c, cfg, g.conditions));
+    }
+  }
+  const add = h('<button class="btn sm secondary" style="margin-top:4px">＋ 条件</button>');
+  add.onclick = () => { g.conditions.push({ left: 'close', op: '>', right: 0, note: '新条件' }); renderGroupConditions(condsEl, g, cfg); };
+  condsEl.appendChild(add);
+}
+
 function ruleRow(rule, cfg, rules) {
   const row = h(`<div class="cond cond-group">
     <div class="parts" style="margin-bottom:8px">
@@ -427,26 +542,7 @@ function ruleRow(rule, cfg, rules) {
     <div class="rule-conds"></div>
   </div>`);
   const condsEl = row.querySelector('.rule-conds');
-  const renderConds = () => {
-    condsEl.innerHTML = '';
-    const g = rule.when;
-    for (const c of g.conditions) {
-      if (c.conditions) {
-        const grp = h(`<div class="cond cond-group"><div class="note">组合（${c.logic === 'all' ? '全部满足' : '任一满足'}）${c.note ? ' · ' + esc(c.note) : ''}</div></div>`);
-        for (const leaf of c.conditions) grp.appendChild(leafRow(leaf, cfg, c.conditions));
-        const delg = h('<button class="del" style="float:right">✕ 删除组</button>');
-        delg.onclick = () => { g.conditions = g.conditions.filter((x) => x !== c); renderConds(); };
-        grp.appendChild(delg);
-        condsEl.appendChild(grp);
-      } else {
-        condsEl.appendChild(leafRow(c, cfg, g.conditions));
-      }
-    }
-    const add = h('<button class="btn sm secondary" style="margin-top:4px">＋ 条件</button>');
-    add.onclick = () => { g.conditions.push({ left: 'close', op: '>', right: 0, note: '新条件' }); renderConds(); };
-    condsEl.appendChild(add);
-  };
-  renderConds();
+  renderGroupConditions(condsEl, rule.when, cfg);
   row.querySelector('.del').onclick = () => {
     const i = rules.indexOf(rule);
     if (i >= 0) rules.splice(i, 1);
@@ -505,6 +601,11 @@ function refreshReview() {
   if (v.dataset.sub === 'review') renderReview(v);
 }
 
+function countConds(g) {
+  if (!g || !Array.isArray(g.conditions)) return 0;
+  return g.conditions.reduce((n, c) => n + (c.conditions ? countConds(c) : 1), 0);
+}
+
 // ---------------- detail + versions ----------------
 async function renderDetail(view, sid) {
   view.innerHTML = '<div class="spinner"></div>';
@@ -516,6 +617,10 @@ async function renderDetail(view, sid) {
     return;
   }
   const cfg = detail.current;
+  const isTrading = (detail.type || (cfg.rules && !cfg.entry ? 'trading' : 'screening')) === 'trading';
+  const metaChips = isTrading
+    ? `<span class="chip">规则 ${(cfg.rules || []).length} 条</span>`
+    : `<span class="chip">${esc(cfg.universe?.type === 'all' ? '全市场' : cfg.universe?.code || '自选')}</span><span class="chip">入场 ${countConds(cfg.entry)} 条</span>`;
   view.innerHTML = `
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
@@ -526,12 +631,12 @@ async function renderDetail(view, sid) {
         <span class="chip accent">v${detail.version}</span>
       </div>
       <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
-        <span class="chip">${esc(cfg.universe.type === 'all' ? '全市场' : cfg.universe.code || '自选')}</span>
-        <span class="chip">规则 ${(cfg.rules || []).length} 条</span>
+        <span class="chip">${isTrading ? '交易' : '选股'}</span>
+        ${metaChips}
       </div>
       <div style="display:flex;gap:10px;margin-top:14px">
         <button class="btn sm secondary" id="d-edit">编辑（存新版本）</button>
-        <button class="btn sm secondary" id="d-screen">去选股</button>
+        ${isTrading ? '' : '<button class="btn sm secondary" id="d-screen">去选股</button>'}
         <button class="btn sm danger" id="d-del">删除</button>
       </div>
     </div>
@@ -542,12 +647,16 @@ async function renderDetail(view, sid) {
   `;
   document.getElementById('d-edit').onclick = () => {
     state.draftConfig = JSON.parse(JSON.stringify(cfg));
+    view.dataset.stratType = isTrading ? 'trading' : 'screening';
     go('review');
   };
-  document.getElementById('d-screen').onclick = () => {
-    state.screenStrategy = { id: sid, name: cfg.name };
-    location.hash = '#/screen';
-  };
+  const screenBtn = document.getElementById('d-screen');
+  if (screenBtn) {
+    screenBtn.onclick = () => {
+      state.screenStrategy = { id: sid, name: cfg.name };
+      location.hash = '#/screen';
+    };
+  }
   document.getElementById('d-del').onclick = async () => {
     if (!confirm(`删除策略「${cfg.name}」？此操作不可恢复。`)) return;
     try {

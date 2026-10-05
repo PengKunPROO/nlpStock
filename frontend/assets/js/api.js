@@ -33,9 +33,9 @@ export const api = {
   getSettings: () => request('GET', '/api/settings'),
   updateSettings: (s) => request('PUT', '/api/settings', s),
 
-  parseStrategy: (messages) => request('POST', '/api/parse-strategy', { messages }),
-  listStrategies: () => request('GET', '/api/strategies'),
-  createStrategy: (config) => request('POST', '/api/strategies', { config }),
+  parseStrategy: (messages, strategyType) => request('POST', '/api/parse-strategy', { messages, strategy_type: strategyType }),
+  listStrategies: (type) => request('GET', '/api/strategies' + (type ? `?type=${encodeURIComponent(type)}` : '')),
+  createStrategy: (config, type) => request('POST', '/api/strategies', { config, type }),
   getStrategy: (id) => request('GET', `/api/strategies/${id}`),
   updateStrategy: (id, config) => request('PUT', `/api/strategies/${id}`, { config }),
   deleteStrategy: (id) => request('DELETE', `/api/strategies/${id}`),

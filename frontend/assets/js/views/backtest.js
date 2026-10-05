@@ -1,27 +1,29 @@
-// 回测 view: params → job → report (metrics + equity curve + trades)
+// 回测 view: 勾选池独立回测（每票独立账户，不轮动）→ job → 报告（组合汇总 + 合并净值 + 每票明细）
 import { api, pollJob } from '../api.js';
 import state from '../store.js';
 import { renderEquity } from '../chart/equity.js';
+import { renderKline } from '../chart/kline.js';
 import { EXIT_LABEL, esc, fmtMoney, fmtPct, fmtPrice, h, paginate, pctClass, toast } from '../util.js';
+
+const metric = (k, v, cls = '') => `<div class="metric"><div class="k">${k}</div><div class="v ${cls}">${v ?? '—'}</div></div>`;
 
 export async function renderBacktestView(view) {
   let strategies = [];
   try {
-    strategies = (await api.listStrategies()).items;
+    strategies = (await api.listStrategies('trading')).items;
   } catch (e) {
     view.innerHTML = `<div class="card"><div class="empty">加载失败：${esc(e.message)}</div></div>`;
     return;
   }
   if (!strategies.length) {
-    view.innerHTML = `<div class="card"><div class="empty">还没有策略。<br>请先到「策略」页创建。</div></div>`;
+    view.innerHTML = `<div class="card"><div class="empty">还没有交易策略。<br>请先到「策略」页创建交易策略。</div></div>`;
     return;
   }
   const first = strategies[0];
-  const defaults = state.settings || {};
   view.innerHTML = `
     <div class="card">
       <div class="field">
-        <label>策略</label>
+        <label>交易策略</label>
         <select id="bt-strategy">
           ${strategies.map((s) => `<option value="${s.id}" ${s.id === first.id ? 'selected' : ''}>${esc(s.name)}（v${s.version}）</option>`).join('')}
         </select>
@@ -31,12 +33,12 @@ export async function renderBacktestView(view) {
         <div class="field"><label>结束日期</label><input id="bt-end" type="date"></div>
       </div>
       <div class="field-row">
-        <div class="field"><label>初始资金</label><input id="bt-cash" type="number" value="1000000" step="100000"></div>
+        <div class="field"><label>初始资金（每票）</label><input id="bt-cash" type="number" value="1000000" step="100000"></div>
         <div class="field"><label>单仓 %</label><input id="bt-pos" type="number" value="20" step="5"></div>
-        <div class="field"><label>最大持仓</label><input id="bt-maxpos" type="number" value="5"></div>
       </div>
-      <button class="btn" id="bt-run">运行回测</button>
     </div>
+    <div class="card" id="bt-pool-card"></div>
+    <button class="btn" id="bt-run" ${(state.screenPicks || []).length ? '' : 'disabled'}>运行回测</button>
     <div id="bt-progress"></div>
     <div id="bt-report"></div>
   `;
@@ -51,31 +53,37 @@ export async function renderBacktestView(view) {
       document.getElementById('bt-end').value = bd.end || '';
       document.getElementById('bt-cash').value = bd.initial_cash || 1000000;
       document.getElementById('bt-pos').value = bd.position_pct || 20;
-      document.getElementById('bt-maxpos').value = bd.max_positions || 5;
     } catch { /* keep current values */ }
   };
   sel.onchange = applyDefaults;
-  await applyDefaults();
+
+  renderPoolCard(document.getElementById('bt-pool-card'));
 
   document.getElementById('bt-run').onclick = async (ev) => {
+    const pool = state.screenPicks || [];
+    if (!pool.length) {
+      toast('回测池为空，请先到「选股」页勾选股票', true);
+      location.hash = '#/screen';
+      return;
+    }
     ev.target.disabled = true;
     ev.target.textContent = '回测中…';
     const prog = document.getElementById('bt-progress');
     prog.innerHTML = `<div class="card"><div class="spinner" style="margin:14px auto"></div>
-      <div class="muted" style="text-align:center;font-size:13px" id="bt-pg-label">加载K线与指标…</div></div>`;
+      <div class="muted" style="text-align:center;font-size:13px" id="bt-pg-label">提交独立回测任务…</div></div>`;
     try {
       const { job_id } = await api.backtest({
-        strategy_id: Number(sel.value),
+        trading_strategy_id: Number(sel.value),
+        pool: state.screenPicks,
         start: document.getElementById('bt-start').value || undefined,
         end: document.getElementById('bt-end').value || undefined,
         initial_cash: Number(document.getElementById('bt-cash').value) || undefined,
         position_pct: Number(document.getElementById('bt-pos').value) || undefined,
-        max_positions: Number(document.getElementById('bt-maxpos').value) || undefined,
       });
       const result = await pollJob(job_id, (job) => {
         const p = job.progress || { done: 0, total: 0 };
         const lbl = document.getElementById('bt-pg-label');
-        if (lbl) lbl.textContent = p.total ? `加载K线 ${p.done}/${p.total}（${p.current || ''}）` : '加载K线与指标…';
+        if (lbl) lbl.textContent = p.total ? `独立回测 ${p.done}/${p.total}（${p.current || ''}）` : '独立回测中…';
       }, 1000);
       state.lastBacktestResult = result;
       prog.innerHTML = '';
@@ -89,7 +97,40 @@ export async function renderBacktestView(view) {
     }
   };
 
+  await applyDefaults();
+
   if (state.lastBacktestResult) renderReport(document.getElementById('bt-report'), state.lastBacktestResult);
+}
+
+// 回测池卡片：chips（可删除）+ 空态（提示去选股页勾选 + 跳转按钮）
+function renderPoolCard(el) {
+  const pool = state.screenPicks || [];
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <b style="font-size:15px">回测池 <span class="chip accent" id="bt-pool-count">${pool.length}</span></b>
+      <span class="muted" style="font-size:12px">${pool.length ? '每票独立账户回测，不轮动' : ''}</span>
+    </div>
+    ${pool.length ? `<div style="display:flex;flex-wrap:wrap;gap:8px">
+      ${pool.map((pk, i) => `<span class="chip" style="display:inline-flex;align-items:center;gap:6px;padding:7px 10px">
+        <b>${esc(pk.name)}</b>
+        <span class="muted" style="font-size:11px">${esc(pk.thscode)}${pk.signal_date ? ' · 信号 ' + esc(pk.signal_date) : ''}</span>
+        <button class="bt-pick-x" data-i="${i}" aria-label="移除 ${esc(pk.name)}" style="border:none;background:none;cursor:pointer;font-size:15px;line-height:1;padding:0 2px;color:var(--muted)">✕</button>
+      </span>`).join('')}
+    </div>` : `<div class="empty" style="padding:16px 0">
+        回测池为空，请先去选股页勾选。<br>
+        <button class="btn sm secondary" id="bt-go-screen" style="margin-top:12px">去选股页勾选</button>
+      </div>`}
+  `;
+  const go = el.querySelector('#bt-go-screen');
+  if (go) go.onclick = () => { location.hash = '#/screen'; };
+  el.querySelectorAll('.bt-pick-x').forEach((x) => {
+    x.onclick = () => {
+      state.screenPicks.splice(Number(x.dataset.i), 1);
+      renderPoolCard(el);
+      const run = document.getElementById('bt-run');
+      if (run) run.disabled = !state.screenPicks.length;
+    };
+  });
 }
 
 function evHtml(ev) {
@@ -108,46 +149,36 @@ function evHtml(ev) {
 }
 
 function renderReport(el, result) {
-  const m = result.metrics;
-  const p = result.params;
-  const audit = result.audit || { daily: [] };
-  const metric = (k, v, cls = '') => `<div class="metric"><div class="k">${k}</div><div class="v ${cls}">${v ?? '—'}</div></div>`;
+  const m = result.metrics || {};
+  const p = result.params || {};
+  const perStock = result.per_stock || [];
   el.innerHTML = `
     <div class="card" style="padding:12px 16px">
-      <div style="font-size:14px;font-weight:600;margin-bottom:4px">${esc(p.strategy_name || '草稿策略')}${p.strategy_version ? '<span class="chip accent" style="margin-left:6px">v' + p.strategy_version + '</span>' : ''}</div>
+      <div style="font-size:14px;font-weight:600;margin-bottom:4px">${esc(p.strategy_name || '交易策略')}${p.strategy_version ? '<span class="chip accent" style="margin-left:6px">v' + p.strategy_version + '</span>' : ''}</div>
       <div style="display:flex;justify-content:space-between;font-size:13px" class="muted">
         <span>${esc(p.start)} → ${esc(p.end)}</span>
-        <span>${esc(p.universe_name || '')}${p.stock_count ? ' · ' + p.stock_count + '只' : ''}</span>
+        <span>${p.stock_count ? p.stock_count + '只 · 每票独立账户' : ''}</span>
       </div>
     </div>
     <div class="metrics">
-      ${metric('总收益', fmtPct(m.total_return_pct), pctClass(m.total_return_pct))}
-      ${metric('年化收益', fmtPct(m.annual_return_pct), pctClass(m.annual_return_pct))}
+      ${metric('平均收益', fmtPct(m.avg_total_return_pct), pctClass(m.avg_total_return_pct))}
+      ${metric('平均胜率', m.avg_win_rate_pct === null || m.avg_win_rate_pct === undefined ? '—' : m.avg_win_rate_pct.toFixed(1) + '%', (m.avg_win_rate_pct ?? 0) >= 50 ? 'up' : '')}
       ${metric('最大回撤', fmtPct(m.max_drawdown_pct, false), 'down')}
-      ${metric('夏普比率', m.sharpe)}
-      ${metric('胜率', m.win_rate_pct === null || m.win_rate_pct === undefined ? '—' : m.win_rate_pct.toFixed(1) + '%', m.win_rate_pct >= 50 ? 'up' : '')}
-      ${metric('盈亏比', m.profit_factor)}
       ${metric('交易次数', m.trade_count + '（盈' + (m.win_count ?? 0) + ' 亏' + (m.loss_count ?? 0) + '）')}
-      ${metric('平均盈/亏', (m.avg_win_pct === null || m.avg_win_pct === undefined ? '—' : '+' + m.avg_win_pct.toFixed(1) + '%') + ' / ' + (m.avg_loss_pct === null || m.avg_loss_pct === undefined ? '—' : m.avg_loss_pct.toFixed(1) + '%'))}
+      ${metric('组合合计', fmtPct(m.total_return_pct), pctClass(m.total_return_pct))}
+      ${metric('期末资产', fmtMoney(m.final_equity))}
     </div>
     <div class="card">
-      <h3>净值曲线与回撤</h3>
+      <h3>合并净值曲线与回撤</h3>
       <canvas id="equity-canvas" class="equity" style="height:250px"></canvas>
-      <div class="muted" style="font-size:11px;margin-top:6px">期末净值 ${fmtMoney(m.final_equity)} · 红色区域为回撤（-30%满幅）· 触摸查看逐日数值</div>
+      <div class="muted" style="font-size:11px;margin-top:6px">合并净值 ${fmtMoney(m.final_equity)} · 红色区域为回撤（-30%满幅）· 触摸查看逐日数值</div>
     </div>
-    <div class="card">
-      <h3>交易明细（${result.trades.length}）<span class="muted" style="font-size:12px;font-weight:400"> · 点击行展开买卖依据</span></h3>
-      <div id="trades-paged"></div>
-    </div>
-    <div class="card">
-      <h3>过程审计（逐日流水）<span class="muted" style="font-size:12px;font-weight:400"> · ${audit.daily.length} 天</span></h3>
-      <div id="audit-paged"></div>
-    </div>
-    <div class="hint">回测口径：T日收盘出信号 → T+1开盘价成交；买入按当前权益×单仓%开仓；止损盘中触发按止损价成交（跳空按开盘价）；含佣金（${p.fee_bps}bp/边）与印花税（${p.stamp_tax_bps}bp/卖出）。期末持仓按最后收盘估值，不计入胜率。</div>
+    <div id="bt-per-stock"></div>
+    <div class="hint">回测口径：每票独立账户（各 ${fmtMoney(p.initial_cash)}），信号日 T 收盘 → T+1 开盘买入（单仓 ${p.position_pct}%），卖出即结束、不轮动；含佣金（${p.fee_bps}bp/边）与印花税（${p.stamp_tax_bps}bp/卖出）。期末持仓按最后收盘估值，不计入胜率。</div>
   `;
   const canvas = document.getElementById('equity-canvas');
   let tipEl = null;
-  renderEquity(canvas, result.equity_curve, {
+  renderEquity(canvas, result.equity_curve || [], {
     onPoint: (pt, idx, pos, width) => {
       if (!tipEl) {
         tipEl = h('<div class="kline-tip" style="position:absolute"></div>');
@@ -165,11 +196,48 @@ function renderReport(el, result) {
     },
   });
 
-  // 交易明细分页 + 展开依据
-  const tradesDiv = document.getElementById('trades-paged');
-  paginate(tradesDiv, result.trades, (container, pageItems) => {
+  // 每票明细卡
+  const perDiv = document.getElementById('bt-per-stock');
+  for (const s of perStock) perDiv.appendChild(renderPerStockCard(s));
+}
+
+function renderPerStockCard(s) {
+  const sm = s.metrics || {};
+  const card = h(`<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+      <div>
+        <b style="font-size:16px">${esc(s.name)}</b>
+        <span class="muted" style="font-size:12px;margin-left:6px">${esc(s.code)}</span>
+        ${s.signal_date ? `<span class="chip" style="margin-left:8px;font-size:11px">信号日 ${esc(s.signal_date)}</span>` : ''}
+      </div>
+      <span class="mono ${pctClass(sm.total_return_pct)}" style="font-size:14px;font-weight:700">${fmtPct(sm.total_return_pct)}</span>
+    </div>
+    <div class="metrics">
+      ${metric('收益', fmtPct(sm.total_return_pct), pctClass(sm.total_return_pct))}
+      ${metric('胜率', sm.win_rate_pct === null || sm.win_rate_pct === undefined ? '—' : sm.win_rate_pct.toFixed(1) + '%', (sm.win_rate_pct ?? 0) >= 50 ? 'up' : '')}
+      ${metric('最大回撤', fmtPct(sm.max_drawdown_pct, false), 'down')}
+      ${metric('交易次数', sm.trade_count + '（盈' + (sm.win_count ?? 0) + ' 亏' + (sm.loss_count ?? 0) + '）')}
+      ${metric('盈亏比', sm.profit_factor)}
+      ${metric('期末资产', fmtMoney(sm.final_equity))}
+    </div>
+    <div class="stock-trades"></div>
+  </div>`);
+  const tDiv = card.querySelector('.stock-trades');
+  const trades = s.trades || [];
+  if (trades.length) {
+    tDiv.innerHTML = `<div class="muted" style="font-size:12px;margin:2px 0 6px">交易明细 · 点击行展开买卖依据 · K线回放标注买卖点</div>`;
+    renderTradesTable(tDiv, trades);
+  } else {
+    tDiv.innerHTML = `<div class="muted" style="font-size:12px;margin-top:6px">无交易（信号日后无足够数据或未成交）</div>`;
+  }
+  return card;
+}
+
+// 交易明细表（分页 + 展开买卖依据 + K线回放）
+function renderTradesTable(container, trades) {
+  paginate(container, trades, (c, pageItems) => {
     const tb = h(`<div style="overflow-x:auto"><table class="trade-table">
-      <thead><tr><th>股票</th><th>买入</th><th>卖出</th><th>天数</th><th>盈亏%</th><th>原因</th></tr></thead>
+      <thead><tr><th>股票</th><th>买入</th><th>卖出</th><th>天数</th><th>盈亏%</th><th>原因</th><th>回放</th></tr></thead>
       <tbody></tbody></table></div>`);
     const tbody = tb.querySelector('tbody');
     for (const t of pageItems) {
@@ -180,8 +248,9 @@ function renderReport(el, result) {
         <td>${t.holding_days}</td>
         <td class="${pctClass(t.pnl_pct)}">${fmtPct(t.pnl_pct)}<div class="muted" style="font-size:11px">${fmtMoney(t.pnl)}</div></td>
         <td><span class="badge ${esc(t.exit_reason)}">${EXIT_LABEL[t.exit_reason] || esc(t.exit_reason)}</span></td>
+        <td><button class="btn sm replay-btn" data-code="${esc(t.code)}">K线回放</button></td>
       </tr>`);
-      const detail = h(`<tr class="trade-detail" style="display:none"><td colspan="6" style="padding:0">
+      const detail = h(`<tr class="trade-detail" style="display:none"><td colspan="7" style="padding:0">
         <div style="padding:4px 8px">
           <div class="muted" style="font-size:11px;margin:4px 0">买入依据</div>${evHtml(t.entry_evidence)}
           <div class="muted" style="font-size:11px;margin:4px 0">卖出依据</div>${evHtml(t.exit_evidence)}
@@ -192,42 +261,116 @@ function renderReport(el, result) {
         if (!visible) tr.insertAdjacentElement('afterend', detail);
         else detail.remove();
       };
+      const rb = tr.querySelector('.replay-btn');
+      rb.onclick = (e) => {
+        e.stopPropagation(); // 不触发行展开/收起
+        openReplay(t.code, t.name, trades.filter((x) => x.code === t.code));
+      };
       tbody.appendChild(tr);
     }
-    container.appendChild(tb);
+    c.appendChild(tb);
   }, 20);
+}
 
-  // 过程审计分页
-  const auditDiv = document.getElementById('audit-paged');
-  const actionDays = audit.daily.filter((d) => d.actions.length > 0);
-  paginate(auditDiv, actionDays.length > 0 ? actionDays : audit.daily.slice(-1), (container, pageItems) => {
-    for (const d of pageItems) {
-      const dayEl = h(`<div style="border-bottom:0.5px solid var(--sep);padding:10px 0">
-        <div style="display:flex;justify-content:space-between;font-size:13px">
-          <b>${esc(d.date)}</b>
-          <span class="mono muted">权益 ${fmtMoney(d.equity)} · 现金 ${fmtMoney(d.cash)}</span>
-        </div>
-      </div>`);
-      for (const a of d.actions) {
-        const actEl = h(`<div style="padding:6px 0 2px;font-size:13px">
-          <span class="badge ${a.action === 'buy' ? 'signal' : 'stop_loss'}">${a.action === 'buy' ? '买入' : '卖出'}</span>
-          <b style="margin:0 6px">${esc(a.name)}</b>
-          <span class="mono muted">${a.shares}股 @${fmtPrice(a.price)} · ${fmtMoney(a.amount)}</span>
-          <span class="badge ${esc(a.reason)}" style="margin-left:4px">${EXIT_LABEL[a.reason] || a.reason}</span>
-        </div>`);
-        if (a.evidence) {
-          const evEl = h(`<div>${evHtml(a.evidence)}</div>`);
-          actEl.appendChild(evEl);
-        }
-        dayEl.appendChild(actEl);
-      }
-      if (d.positions.length > 0) {
-        const posEl = h(`<div class="muted" style="font-size:12px;margin-top:4px">
-          持仓：${d.positions.map((p2) => `${esc(p2.name)} ${p2.shares}股@${fmtPrice(p2.cost)}(${fmtPct(p2.pnl_pct)})`).join(' · ')}
-        </div>`);
-        dayEl.appendChild(posEl);
-      }
-      container.appendChild(dayEl);
+// ---------- K线回放（买卖点标注） ----------
+
+// 把 trade 的 bar 索引映射到当前 K 线窗口：优先按日期精确匹配（回测全区间 bars 与
+// 250 根回放窗口可能不对齐），日期在窗口外时退回 entry_idx/exit_idx（若在窗口内）。
+function resolveIdx(bars, date, idx) {
+  if (!bars.length) return null;
+  if (date) {
+    const i = bars.findIndex((b) => b.date >= date);
+    if (i !== -1 && bars[i].date === date) return i;
+    if (i === -1 || (i === 0 && bars[0].date > date)) return null; // 日期在窗口外
+  }
+  if (Number.isInteger(idx) && idx >= 0 && idx < bars.length) return idx;
+  return null;
+}
+
+let replayCleanup = null;
+function closeReplay() {
+  if (replayCleanup) { replayCleanup(); replayCleanup = null; }
+  const o = document.getElementById('replay-overlay');
+  if (o) o.remove();
+}
+
+async function openReplay(code, name, trades) {
+  closeReplay();
+  const overlay = h(`<div id="replay-overlay" class="replay-overlay">
+    <div class="replay-head">
+      <div>
+        <b style="font-size:16px">${esc(name)}</b>
+        <span class="muted" style="font-size:12px;margin-left:6px">${esc(code)} · ${trades.length} 笔交易</span>
+      </div>
+      <button class="btn sm secondary" id="replay-close">关闭</button>
+    </div>
+    <div class="replay-legend">
+      <span class="replay-lg"><i class="replay-tri buy"></i>买入点</span>
+      <span class="replay-lg"><i class="replay-tri sell"></i>卖出点</span>
+      <span class="muted" style="font-size:12px">点击 ▲ / ▼ 查看操作详情</span>
+    </div>
+    <div class="card replay-canvas-wrap">
+      <canvas id="replay-canvas" class="kline" style="height:520px"></canvas>
+      <div id="replay-tip" class="kline-tip" style="display:none"></div>
+    </div>
+    <div class="hint" style="margin-top:8px">红▲=买入 · 绿▼=卖出；点击标注查看方向/日期/价格/股数/原因，点击 K 线查看当日行情。</div>
+  </div>`);
+  document.body.appendChild(overlay);
+  const closeBtn = overlay.querySelector('#replay-close');
+  closeBtn.onclick = closeReplay;
+  overlay.addEventListener('pointerdown', (e) => { if (e.target === overlay) closeReplay(); });
+
+  const tip = overlay.querySelector('#replay-tip');
+  const placeTip = (pos, width) => {
+    const flip = pos.x > width - 200;
+    tip.style.left = flip ? 'auto' : `${Math.max(4, pos.x + 14)}px`;
+    tip.style.right = flip ? `${Math.max(4, width - pos.x + 14)}px` : 'auto';
+    tip.style.display = 'block';
+  };
+  const showBarTip = (bar, pos, width) => {
+    const chg = bar.open ? (bar.close / bar.open - 1) * 100 : null;
+    tip.innerHTML = `
+      <div style="font-weight:700;margin-bottom:2px">${esc(bar.date)}</div>
+      <div class="t-row"><span>开盘</span><span class="mono ${pctClass(bar.close - bar.open)}">${fmtPrice(bar.open)}</span></div>
+      <div class="t-row"><span>最高</span><span class="mono up">${fmtPrice(bar.high)}</span></div>
+      <div class="t-row"><span>最低</span><span class="mono down">${fmtPrice(bar.low)}</span></div>
+      <div class="t-row"><span>收盘</span><span class="mono ${pctClass(bar.close - bar.open)}">${fmtPrice(bar.close)}</span></div>
+      <div class="t-row"><span>涨跌</span><span class="mono ${pctClass(chg)}">${fmtPct(chg)}</span></div>`;
+    placeTip(pos, width);
+  };
+
+  try {
+    const data = await api.kline(code, '1d', 250);
+    if (!document.getElementById('replay-overlay')) return; // 加载期间用户已关闭
+    const bars = data.bars || [];
+    const markers = [];
+    for (const t of trades) {
+      const ei = resolveIdx(bars, t.entry_date, t.entry_idx);
+      const xi = resolveIdx(bars, t.exit_date, t.exit_idx);
+      if (ei !== null) markers.push({ idx: ei, type: 'buy', price: t.entry_price, detail: { dir: '买入', date: t.entry_date, price: t.entry_price, shares: t.shares, reason: '入场信号' } });
+      if (xi !== null) markers.push({ idx: xi, type: 'sell', price: t.exit_price, detail: { dir: '卖出', date: t.exit_date, price: t.exit_price, shares: t.shares, reason: EXIT_LABEL[t.exit_reason] || t.exit_reason || '—' } });
     }
-  }, 10);
+    const canvas = overlay.querySelector('#replay-canvas');
+    replayCleanup = renderKline(canvas, bars, {
+      markers,
+      onMarkerTap: (m, pos, width) => {
+        const d = m.detail || {};
+        tip.innerHTML = `
+          <div style="font-weight:700;margin-bottom:2px"><span class="badge ${m.type === 'buy' ? 'signal' : 'stop_loss'}">${esc(d.dir)}</span> ${esc(d.date)}</div>
+          <div class="t-row"><span>价格</span><span class="mono">${fmtPrice(d.price)}</span></div>
+          <div class="t-row"><span>股数</span><span class="mono">${d.shares ?? '—'}</span></div>
+          <div class="t-row"><span>原因</span><span>${esc(d.reason)}</span></div>`;
+        placeTip(pos, width);
+      },
+      onBarTap: (bar, idx, pos, width) => {
+        showBarTip(bar, pos, width);
+        return true;
+      },
+      onBlankTap: () => { tip.style.display = 'none'; },
+    });
+  } catch (e) {
+    replayCleanup = () => {};
+    overlay.querySelector('.replay-canvas-wrap').innerHTML =
+      `<div class="empty">K线加载失败：${esc(e.message || String(e))}</div>`;
+  }
 }
