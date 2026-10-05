@@ -210,8 +210,10 @@
     const dates = tradingDays(sig, 150); // bar 0 = 信号日
     const feeRate = params.fee_bps / 10000;
     const taxRate = params.stamp_tax_bps / 10000;
-    let price = 9 + rnd() * 80 + idx * 13;
-    const drift = (rnd() - 0.42) * 0.005;
+    // 价格基座与 /api/kline 的 makeBars 一致（20 + seed%5*3），保证回放标注落在 K 线可视区间内
+    const base = 20 + ((code.length + (code.charCodeAt(0) % 7)) % 5) * 3;
+    let price = base * (0.88 + rnd() * 0.24);
+    const drift = (rnd() - 0.5) * 0.0012;
     let cash = params.initial_cash, shares = 0, cost = 0, stopPrice = 0;
     let nextBuyAt = 1, holdUntil = -1, tradeStart = null;
     let peak = 0;

@@ -121,7 +121,10 @@ export function renderKline(canvas, bars, opts = {}) {
     for (const m of markers) {
       const x = padL + m.idx * step + step / 2;
       const py = yMain(m.price ?? bars[m.idx]?.close);
-      const y = py + (m.type === 'buy' ? MARK_OFF : -MARK_OFF);
+      let y = py + (m.type === 'buy' ? MARK_OFF : -MARK_OFF);
+      // 价格超出可视区间时贴边显示，保证标注始终可见（真实成交价恒在图内，不会触发）
+      if (y < padT + 2) y = padT + 2;
+      else if (y > bodyBottom - 2) y = bodyBottom - 2;
       ctx.fillStyle = m.type === 'buy' ? UP : DOWN;
       ctx.beginPath();
       if (m.type === 'buy') {
