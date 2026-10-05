@@ -432,6 +432,28 @@ function universeCard(cfg) {
 
 const FIELD_OPTS = ['open', 'high', 'low', 'close', 'volume'];
 const HOLD_FIELDS = ['pnl_pct', 'hold_days', 'dd_from_peak', 'cost'];
+
+// 用户可见的中文标签映射（option 的 value 仍用原始字段名，仅显示文案中文）
+const FIELD_LABELS = {
+  pnl_pct: '浮盈亏%', hold_days: '持仓天数', dd_from_peak: '距高点回撤%', cost: '成本价',
+  open: '开盘价', high: '最高价', low: '最低价', close: '收盘价', volume: '成交量',
+};
+const HOLD_FIELD_HINTS = {
+  pnl_pct: '相对成本价浮盈亏%，"跌5%"即 ≤ -5',
+  hold_days: '持仓交易日数',
+  dd_from_peak: '距持仓期最高收盘价回撤%（≤0）',
+  cost: '加权成本价',
+};
+const KIND_LABELS = {
+  MA: '均线', EMA: '指数均线', PCT_CHANGE: '涨跌幅%', VRATIO: '量比',
+  BODY_RATIO: '实体强度', UPPER_SHADOW_RATIO: '上影比例', MA_CONVERGE: '均线粘合', BOX_TOP: '箱体上沿',
+  MACD_DIF: 'MACD快线', MACD_DEA: 'MACD慢线', MACD_HIST: 'MACD柱',
+  KDJ_K: 'KDJ·K', KDJ_D: 'KDJ·D', KDJ_J: 'KDJ·J', RSI: 'RSI',
+  BOLL_UP: '布林上轨', BOLL_MID: '布林中轨', BOLL_LOW: '布林下轨',
+};
+const PARAM_LABELS = {
+  of: '基于', n: '周期', mas: '均线组', fast: '快线', slow: '慢线', signal: '信号线', m1: 'M1', m2: 'M2', k: '标准差倍数',
+};
 const KIND_OPTS = ['MA', 'PCT_CHANGE', 'VRATIO', 'BODY_RATIO', 'UPPER_SHADOW_RATIO', 'MA_CONVERGE', 'BOX_TOP',
   'EMA', 'MACD_DIF', 'MACD_DEA', 'MACD_HIST', 'KDJ_K', 'KDJ_D', 'KDJ_J', 'RSI', 'BOLL_UP', 'BOLL_MID', 'BOLL_LOW'];
 const KIND_PARAMS = {
@@ -446,32 +468,34 @@ const IND_PARAM_FIELDS = ['of', 'n', 'mas', 'fast', 'slow', 'signal', 'm1', 'm2'
 
 function paramInput(ind, p) {
   if (p === 'of') {
-    return `<select data-p="of">${FIELD_OPTS.map((f) => `<option ${f === (ind.of || 'close') ? 'selected' : ''}>${f}</option>`).join('')}</select>`;
+    return `<select data-p="of">${FIELD_OPTS.map((f) => `<option value="${f}" ${f === (ind.of || 'close') ? 'selected' : ''}>${FIELD_LABELS[f] || f}</option>`).join('')}</select>`;
   }
   if (p === 'mas') {
-    return `<input type="text" placeholder="mas,逗号分隔" value="${esc((ind.mas || []).join(','))}" data-p="mas" style="min-width:90px">`;
+    return `<input type="text" placeholder="ma5,ma10" value="${esc((ind.mas || []).join(','))}" data-p="mas">`;
   }
   const v = ind[p];
   if (p === 'k') {
-    return `<input type="number" step="0.5" placeholder="k倍数" value="${v ?? ''}" data-p="k" style="min-width:64px" title="标准差倍数，默认2">`;
+    return `<input type="number" step="0.5" placeholder="默认2" value="${v ?? ''}" data-p="k" title="标准差倍数，默认 2">`;
   }
-  return `<input type="number" placeholder="${p}" value="${v ?? ''}" data-p="${p}" style="min-width:52px">`;
+  return `<input type="number" placeholder="数值" value="${v ?? ''}" data-p="${p}">`;
 }
 
 function indRow(ind, cfg) {
   const row = h(`<div class="cond">
-    <div class="parts">
-      <input type="text" value="${esc(ind.id)}" style="min-width:70px" data-k="id" title="指标id">
-      <select data-k="kind">${KIND_OPTS.map((k) => `<option ${k === ind.kind ? 'selected' : ''}>${k}</option>`).join('')}</select>
-      <span class="params" style="display:flex;gap:6px;flex:1;flex-wrap:wrap;align-items:center"></span>
-      <button class="del" title="删除">✕</button>
+    <div class="ind-head">
+      <select data-k="kind" class="ind-kind">${KIND_OPTS.map((k) => `<option value="${k}" ${k === ind.kind ? 'selected' : ''}>${KIND_LABELS[k] || k}</option>`).join('')}</select>
+      <button class="del" title="删除此指标">✕</button>
     </div>
+    <div class="cond-extras">
+      <label class="cond-field"><span>指标名</span><input type="text" value="${esc(ind.id)}" data-k="id" title="指标 id（小写英文，供条件引用）"></label>
+    </div>
+    <div class="cond-extras" id="ind-param-list"></div>
   </div>`);
-  const paramsEl = row.querySelector('.params');
+  const paramsEl = row.querySelector('#ind-param-list');
   const renderParams = () => {
     paramsEl.innerHTML = '';
     for (const p of KIND_PARAMS[ind.kind] || []) {
-      paramsEl.appendChild(h(`<span>${paramInput(ind, p)}</span>`));
+      paramsEl.appendChild(h(`<label class="cond-field"><span>${PARAM_LABELS[p] || p}</span>${paramInput(ind, p)}</label>`));
     }
   };
   renderParams();
@@ -538,18 +562,20 @@ function renderGroupConditions(condsEl, g, cfg) {
 
 function ruleRow(rule, cfg, rules) {
   const row = h(`<div class="cond cond-group">
-    <div class="parts" style="margin-bottom:8px">
-      <select data-k="action">
-        <option value="buy" ${rule.action === 'buy' ? 'selected' : ''}>买入</option>
-        <option value="sell" ${rule.action === 'sell' ? 'selected' : ''}>卖出</option>
+    <div class="ind-head">
+      <select data-k="action" class="ind-kind">
+        <option value="buy" ${rule.action === 'buy' ? 'selected' : ''}>买入（补仓/加仓）</option>
+        <option value="sell" ${rule.action === 'sell' ? 'selected' : ''}>卖出（减仓/清仓）</option>
       </select>
-      <input type="number" placeholder="仓位%" value="${rule.size_pct ?? ''}" data-k="size_pct" style="min-width:64px" title="买=权益% 卖=持仓%，空=默认">
-      <input type="number" placeholder="触发上限" value="${rule.max_times ?? ''}" data-k="max_times" style="min-width:64px" title="单只股票最多触发次数，空=不限">
-      <input type="text" placeholder="备注（原文依据）" value="${esc(rule.note || '')}" data-k="note" style="flex:2;min-width:120px">
-      <button class="del">✕ 删规则</button>
+      <button class="del" title="删除此规则">✕</button>
     </div>
-    <div class="note">触发条件（${rule.when.logic === 'all' ? '全部满足' : '任一满足'}）</div>
+    <div class="cond-extras">
+      <label class="cond-field"><span>仓位%</span><input type="number" placeholder="买=权益% 卖=持仓%" value="${rule.size_pct ?? ''}" data-k="size_pct" title="买=占当前总权益%，卖=占当前持仓%（100=清仓，50=卖一半）"></label>
+      <label class="cond-field"><span>最多触发</span><input type="number" placeholder="不限" value="${rule.max_times ?? ''}" data-k="max_times" title="单只股票单次持仓内最多触发次数，空=不限"></label>
+    </div>
+    <div class="rule-logic">触发条件（${rule.when.logic === 'all' ? '全部满足' : '任一满足'}才执行）</div>
     <div class="rule-conds"></div>
+    <div class="cond-note-input"><input type="text" placeholder="备注：对应你的原话（可选）" value="${esc(rule.note || '')}" data-k="note"></div>
   </div>`);
   const condsEl = row.querySelector('.rule-conds');
   renderGroupConditions(condsEl, rule.when, cfg);
@@ -567,23 +593,31 @@ function ruleRow(rule, cfg, rules) {
 
 function leafRow(leaf, cfg, siblings) {
   const ids = [...FIELD_OPTS, ...HOLD_FIELDS, ...cfg.indicators.map((i) => i.id)];
-  const idOpts = (sel) => ids.map((i) => `<option value="${i}" ${i === sel ? 'selected' : ''}>${i}</option>`).join('');
+  const labelFor = (id) => {
+    if (FIELD_LABELS[id]) return FIELD_LABELS[id];
+    const ind = cfg.indicators.find((i) => i.id === id);
+    return ind ? `${id}（${KIND_LABELS[ind.kind] || ind.kind}）` : id;
+  };
+  const titleFor = (id) => HOLD_FIELD_HINTS[id] || '';
+  const idOpts = (sel) => ids.map((i) => `<option value="${i}" ${i === sel ? 'selected' : ''} title="${esc(titleFor(i))}">${esc(labelFor(i))}</option>`).join('');
   const opOpts = ['>', '>=', '<', '<=', '=='].map((o) => `<option ${o === leaf.op ? 'selected' : ''}>${o}</option>`).join('');
   const isNumRight = typeof leaf.right === 'number';
   const row = h(`<div class="cond">
-    <div class="note">${esc(leaf.note || '（无原文标注）')}</div>
-    <div class="parts">
+    <div class="cond-sentence">
+      <span class="cond-word">当</span>
       <select data-k="left">${idOpts(leaf.left)}</select>
       <select data-k="op">${opOpts}</select>
       ${isNumRight
-        ? `<input type="number" value="${leaf.right}" data-k="right-num" style="min-width:70px">`
+        ? `<input type="number" value="${leaf.right}" data-k="right-num">`
         : `<select data-k="right-sel">${idOpts(leaf.right)}</select>`}
-      <input type="number" placeholder="×系数" value="${leaf.right_factor ?? ''}" style="min-width:56px" data-k="rf" title="right×该系数">
-      <input type="number" placeholder="回看" value="${leaf.within ?? ''}" style="min-width:56px" data-k="within" title="最近N日内任一天成立">
-      <input type="number" placeholder="lag" value="${leaf.right_lag || ''}" style="min-width:46px" data-k="rlag" title="右值取N日前">
-      <button class="del">✕</button>
+      <button class="del" title="删除此条件">✕</button>
     </div>
-    <div style="margin-top:6px"><input type="text" placeholder="备注（原文依据）" value="${esc(leaf.note || '')}" data-k="note" style="font-size:13px"></div>
+    <div class="cond-extras">
+      <label class="cond-field"><span>×系数</span><input type="number" value="${leaf.right_factor ?? ''}" data-k="rf" title="右值 × 该系数后再比较"></label>
+      <label class="cond-field"><span>最近N日内</span><input type="number" value="${leaf.within ?? ''}" data-k="within" title="最近 N 个交易日内任一天成立"></label>
+      <label class="cond-field"><span>前移N日</span><input type="number" value="${leaf.right_lag || ''}" data-k="rlag" title="取值取 N 个交易日前的值"></label>
+    </div>
+    <div class="cond-note-input"><input type="text" placeholder="备注：对应你的原话（可选）" value="${esc(leaf.note || '')}" data-k="note"></div>
   </div>`);
   row.querySelector('.del').onclick = () => {
     const i = siblings.indexOf(leaf);

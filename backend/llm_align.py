@@ -135,6 +135,7 @@ _TRADING_PROTOCOL = """输出协议（严格遵守）：
 - 信息足够时立即输出 config，不要为了流程而追问；通常 1-2 轮收敛
 - 分阶段叙事（先A后B再C）必须用 within 回看语义表达阶段先后
 - 买多少/加仓/减仓必须用 rules 表达（见规则模型）；风控（止损/止盈/移动止损/最长持仓）用 risk 字段，不写成 rules
+- 语义强制：交易策略里"跌N%"、"涨N%"、"浮亏/浮盈N%"、"回本/解套"等相对持仓成本的说法，一律用内置持仓字段 pnl_pct 表达（跌→pnl_pct<=-N，涨→pnl_pct>=N），禁止为此生成 MA/PCT_CHANGE 等任何技术指标；只有明确说"价格站上/跌破某均线"、"N日均线"、"金叉死叉"等才用技术指标
 - config 必须可通过 TradingStrategy 校验：指标id全部声明、条件引用可解析、rules 非空、每条 buy 规则必须引用持仓字段、risk/backtest_defaults 完整"""
 
 _SCREENING_REFERENCE = {

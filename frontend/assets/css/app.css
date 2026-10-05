@@ -188,13 +188,37 @@ textarea { resize: vertical; min-height: 90px; line-height: 1.45; }
 @keyframes toast-in { from { transform: translateY(-8px); opacity: 0; } to { transform: none; opacity: 1; } }
 
 /* condition editor */
-.cond { border: 0.5px solid var(--sep); border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; background: var(--card-2); }
+.cond { border: 0.5px solid var(--sep); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; background: var(--card-2); }
 .cond .note { font-size: 13px; color: var(--text-2); margin-bottom: 8px; }
 .cond .parts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .cond .parts > * { min-width: 0; }
-.cond input, .cond select { padding: 6px 8px; font-size: 13px; width: auto; min-width: 58px; flex: 1; }
-.cond .del { color: var(--danger); background: none; border: none; font-size: 15px; cursor: pointer; padding: 6px; flex-shrink: 0; }
 .cond-group { border-left: 3px solid var(--accent); }
+
+/* 一句话式条件主行：当 [左值] [运算符] [右值] [删除] */
+.cond-sentence { display: flex; gap: 8px; align-items: center; }
+.cond-word { font-size: 13px; color: var(--text-3); flex-shrink: 0; }
+.cond-sentence select, .cond-sentence input { flex: 1; min-width: 0; }
+
+/* 可选参数行：每个字段带中文标签，独占一行或网格，不重叠 */
+.cond-extras { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.cond-field { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 120px; }
+.cond-field > span { font-size: 12px; color: var(--text-3); flex-shrink: 0; white-space: nowrap; }
+.cond-field input, .cond-field select { flex: 1; min-width: 0; }
+
+/* 备注输入 */
+.cond-note-input { margin-top: 8px; }
+.cond-note-input input { width: 100%; }
+
+/* 指标/规则头部：类型下拉 + 删除按钮 */
+.ind-head { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.ind-kind { flex: 1; }
+
+/* 规则触发条件说明 */
+.rule-logic { font-size: 13px; color: var(--text-2); margin: 10px 0 6px; }
+
+/* 基础 input/select：去掉 flex:1 避免挤成一团，加大触控目标 */
+.cond input, .cond select { padding: 8px 10px; font-size: 14px; border-radius: 8px; border: 0.5px solid var(--sep); background: var(--card); color: var(--text); min-height: 40px; width: auto; }
+.cond .del { color: var(--danger); background: none; border: none; font-size: 16px; cursor: pointer; padding: 8px; flex-shrink: 0; min-height: 40px; line-height: 1; }
 .hint { font-size: 12px; color: var(--text-3); margin: 6px 0 12px; line-height: 1.5; }
 
 /* kline */

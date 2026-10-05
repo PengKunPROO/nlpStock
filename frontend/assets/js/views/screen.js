@@ -57,16 +57,20 @@ export async function renderScreenView(view) {
       const { job_id } = await api.screen({ strategy_id: sid, start, end });
       const result = await pollJob(job_id, (job) => {
         const p = job.progress || { done: 0, total: 0 };
-        document.getElementById('pg-label').textContent = `扫描 ${p.current || ''}`;
-        document.getElementById('pg-count').textContent = p.total ? `${p.done}/${p.total}` : '';
-        document.getElementById('pg-bar').style.width = p.total ? `${Math.round((p.done / p.total) * 100)}%` : '0%';
+        const lbl = document.getElementById('pg-label');
+        const cnt = document.getElementById('pg-count');
+        const bar = document.getElementById('pg-bar');
+        if (!lbl) return; // 界面已切换，跳过进度更新（任务仍继续轮询）
+        lbl.textContent = `扫描 ${p.current || ''}`;
+        if (cnt) cnt.textContent = p.total ? `${p.done}/${p.total}` : '';
+        if (bar) bar.style.width = p.total ? `${Math.round((p.done / p.total) * 100)}%` : '0%';
       }, 1000);
       state.lastScreenResult = result;
       state.screenPicks = []; // 新结果重置勾选
-      prog.innerHTML = '';
-      renderResults(document.getElementById('sc-results'), result);
+      const resultsEl = document.getElementById('sc-results');
+      if (resultsEl) { prog.innerHTML = ''; renderResults(resultsEl, result); }
     } catch (e) {
-      prog.innerHTML = '';
+      if (prog) prog.innerHTML = '';
       toast(`选股失败：${e.message}`, true);
     } finally {
       ev.target.disabled = false;
