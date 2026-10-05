@@ -1,4 +1,4 @@
-"""StrategyConfig pydantic schema — the quantified strategy contract (docs/api-contract.md §1-2)."""
+"""Quantified strategy pydantic schema — ScreeningStrategy (选股) 与 TradingStrategy (交易) (docs/api-contract.md §1-2)."""
 from __future__ import annotations
 
 import re
@@ -219,140 +219,121 @@ def _assert_no_cycle(graph: dict[str, list[str]]) -> None:
             dfs(n)
 
 
-class StrategyConfig(BaseModel):
+def _check_name_len(v: str) -> str:
+    v = v.strip()
+    if not (1 <= len(v) <= 40):
+        raise ValueError("name must be 1-40 chars")
+    return v
+
+
+def _check_indicator_refs(indicators, groups) -> None:
+    """指标引用校验：indicator id 唯一 + of/mas 引用可解析 + 无循环 + 条件引用可解析。
+
+    groups: 需要校验条件引用的 ConditionGroup 列表（Screening 的 entry / Trading 的 rules[].when）。
+    """
+    ids = [ind.id for ind in indicators]
+    if len(ids) != len(set(ids)):
+        raise ValueError("indicator ids must be unique")
+    known = set(ids) | BASE_FIELDS | HOLD_FIELDS
+
+    graph: dict[str, list[str]] = {ind.id: [] for ind in indicators}
+    for ind in indicators:
+        refs: list[str] = []
+        if ind.of and ind.of not in BASE_FIELDS:
+            if ind.of not in known:
+                raise ValueError(f"indicator {ind.id} references unknown field/indicator: {ind.of}")
+            refs.append(ind.of)
+        for ref in ind.mas or []:
+            if ref not in known:
+                raise ValueError(f"MA_CONVERGE references unknown indicator: {ref}")
+            if ref not in BASE_FIELDS:
+                refs.append(ref)
+        graph[ind.id] = refs
+
+    _assert_no_cycle(graph)
+
+    def walk(conds: list, depth: int) -> None:
+        for c in conds:
+            if isinstance(c, ConditionGroup):
+                if depth >= 2:
+                    raise ValueError("condition nesting deeper than 2 levels is not allowed")
+                walk(c.conditions, depth + 1)
+            else:
+                if c.left not in known:
+                    raise ValueError(f"condition references unknown indicator/field: {c.left}")
+                if isinstance(c.right, str) and c.right not in known:
+                    raise ValueError(f"condition references unknown indicator/field: {c.right}")
+
+    for g in groups:
+        if g is not None:
+            walk(g.conditions, 1)
+
+
+def _walk_leaves(group: ConditionGroup):
+    """递归展开条件组，产出所有叶子条件 LeafCondition。"""
+    for c in group.conditions:
+        if isinstance(c, ConditionGroup):
+            yield from _walk_leaves(c)
+        else:
+            yield c
+
+
+def _references_hold_field(cond) -> bool:
+    return cond.left in HOLD_FIELDS or (isinstance(cond.right, str) and cond.right in HOLD_FIELDS)
+
+
+class ScreeningStrategy(BaseModel):
+    """选股策略：纯筛选，entry 入场条件不可引用持仓状态字段（未持仓时无意义）。"""
+
     name: str
     description: str = ""
     source_text: str = ""
     parse_engine: str = "llm"
     universe: Universe
     indicators: conlist(IndicatorSpec, min_items=1, max_items=30)  # type: ignore[valid-type]
-    entry: Union[ConditionGroup, None] = None
-    exit: Union[ConditionGroup, None] = None
-    rules: Union[list[Rule], None] = None
+    entry: ConditionGroup
+
+    @validator("name")
+    @classmethod
+    def _check_name(cls, v: str) -> str:
+        return _check_name_len(v)
+
+    @root_validator(skip_on_failure=True)
+    def _check(cls, values):  # noqa: N805
+        indicators = values.get("indicators") or []
+        entry = values.get("entry")
+        if entry is None or not entry.conditions:
+            raise ValueError("entry.conditions must not be empty")
+        _check_indicator_refs(indicators, [entry])
+        for cond in _walk_leaves(entry):
+            if _references_hold_field(cond):
+                raise ValueError("screening entry must not reference hold fields (cost/pnl_pct/hold_days/dd_from_peak)")
+        return values
+
+
+class TradingStrategy(BaseModel):
+    """交易策略：持仓管理规则，入场由选股策略负责；buy 规则仅用于补仓（必须引用持仓字段）。"""
+
+    name: str
+    description: str = ""
+    source_text: str = ""
+    parse_engine: str = "llm"
+    indicators: conlist(IndicatorSpec, min_items=1, max_items=30)  # type: ignore[valid-type]
+    rules: conlist(Rule, min_items=1)  # type: ignore[valid-type]
     risk: RiskConfig = RiskConfig()
     backtest_defaults: BacktestDefaults
 
     @validator("name")
     @classmethod
     def _check_name(cls, v: str) -> str:
-        v = v.strip()
-        if not (1 <= len(v) <= 40):
-            raise ValueError("name must be 1-40 chars")
-        return v
+        return _check_name_len(v)
 
     @root_validator(skip_on_failure=True)
-    def _normalize_rules(cls, values):  # noqa: N805
-        """v1 兼容：entry/exit 自动转为 rules（先执行，供 _check_refs 使用）。"""
-        if not values.get("rules"):
-            entry = values.get("entry")
-            if entry is None:
-                raise ValueError("必须提供 rules 或 entry")
-            rules = [Rule(when=entry, action="buy", size_pct=None, note=entry.note or "入场信号")]
-            exit_ = values.get("exit")
-            if exit_ is not None and exit_.conditions:
-                rules.append(Rule(when=exit_, action="sell", size_pct=100, note=exit_.note or "离场信号"))
-            values["rules"] = rules
-        return values
-
-    @root_validator(skip_on_failure=True)
-    def _check_refs(cls, values):  # noqa: N805
+    def _check(cls, values):  # noqa: N805
         indicators = values.get("indicators") or []
-        ids = [ind.id for ind in indicators]
-        if len(ids) != len(set(ids)):
-            raise ValueError("indicator ids must be unique")
-        known = set(ids) | BASE_FIELDS | HOLD_FIELDS
-
-        graph: dict[str, list[str]] = {ind.id: [] for ind in indicators}
-        for ind in indicators:
-            refs: list[str] = []
-            if ind.of and ind.of not in BASE_FIELDS:
-                if ind.of not in known:
-                    raise ValueError(f"indicator {ind.id} references unknown field/indicator: {ind.of}")
-                refs.append(ind.of)
-            for ref in ind.mas or []:
-                if ref not in known:
-                    raise ValueError(f"MA_CONVERGE references unknown indicator: {ref}")
-                if ref not in BASE_FIELDS:
-                    refs.append(ref)
-            graph[ind.id] = refs
-
-        _assert_no_cycle(graph)
-
-        def walk(conds: list, depth: int) -> None:
-            for c in conds:
-                if isinstance(c, ConditionGroup):
-                    if depth >= 2:
-                        raise ValueError("condition nesting deeper than 2 levels is not allowed")
-                    walk(c.conditions, depth + 1)
-                else:
-                    if c.left not in known:
-                        raise ValueError(f"condition references unknown indicator/field: {c.left}")
-                    if isinstance(c.right, str) and c.right not in known:
-                        raise ValueError(f"condition references unknown indicator/field: {c.right}")
-
-        for rule in values.get("rules") or []:
-            walk(rule.when.conditions, 1)
+        rules = values.get("rules") or []
+        _check_indicator_refs(indicators, [r.when for r in rules])
+        for rule in rules:
+            if rule.action == "buy" and not any(_references_hold_field(c) for c in _walk_leaves(rule.when)):
+                raise ValueError("buy rule must reference a hold field (cost/pnl_pct/hold_days/dd_from_peak)")
         return values
-
-
-REFERENCE_STRATEGY: dict = {
-    "name": "阴跌急跌·止跌反转·回踩进场",
-    "description": "阴跌急跌洗出空间，均线粘合止跌，底部放量站上20日线确认反转，缩量回踩不破箱体上沿进场；上影线/缩量力竭或破位离场。",
-    "source_text": "1，阴跌之后等急跌，2，急跌之后等止跌，(均线拧到一块是止跌信号) 3，止跌之后等反转(底部放量，阳线实体越来越大，价格站上关键均线才是反转信号)，4，反转之后等进场(拉一波再缩量回踩不破前期箱体上沿，确认支撑有效，说明主力锁仓，这时候才可以进)，5，力竭出现，因为量能跟不上，出现上影线，越来越短的阳线，都是力竭信号，6，力竭后的离场，不舍得卖啊，这时落袋才是利润，7，离场之后等待回落，千万别追，8，回调支撑如果被击穿就不要进了。",
-    "parse_engine": "llm",
-    "universe": {"type": "index", "code": "000300.SH"},
-    "indicators": [
-        {"id": "ma5", "kind": "MA", "of": "close", "n": 5},
-        {"id": "ma10", "kind": "MA", "of": "close", "n": 10},
-        {"id": "ma20", "kind": "MA", "of": "close", "n": 20},
-        {"id": "vma5", "kind": "MA", "of": "volume", "n": 5},
-        {"id": "vr", "kind": "VRATIO", "n": 5},
-        {"id": "body", "kind": "BODY_RATIO"},
-        {"id": "ush", "kind": "UPPER_SHADOW_RATIO"},
-        {"id": "conv", "kind": "MA_CONVERGE", "mas": ["ma5", "ma10", "ma20"]},
-        {"id": "box20", "kind": "BOX_TOP", "n": 20},
-        {"id": "chg5", "kind": "PCT_CHANGE", "of": "close", "n": 5},
-        {"id": "chg10", "kind": "PCT_CHANGE", "of": "close", "n": 10},
-        {"id": "chg20", "kind": "PCT_CHANGE", "of": "close", "n": 20},
-    ],
-    "entry": {
-        "logic": "all",
-        "conditions": [
-            {"left": "chg20", "op": "<=", "right": -8, "within": 60, "note": "①阴跌：近期出现过20日累计跌幅≥8%"},
-            {"left": "chg5", "op": "<=", "right": -4, "within": 40, "note": "②急跌：近期出现过5日急跌≥4%"},
-            {"left": "conv", "op": "<=", "right": 2.5, "within": 15, "note": "③止跌：均线拧到一块（粘合度≤2.5%）"},
-            {"left": "vr", "op": ">=", "right": 1.8, "within": 10, "note": "④反转：底部放量（量比≥1.8）"},
-            {"left": "close", "op": ">", "right": "ma20", "note": "⑤站上关键均线20日线"},
-            {"left": "chg10", "op": ">=", "right": 5, "within": 15, "note": "⑥拉一波：出现过10日涨幅≥5%"},
-            {"left": "close", "op": ">=", "right": "box20", "right_factor": 0.98, "note": "⑦回踩不破前期箱体上沿（容差2%）"},
-            {"left": "vr", "op": "<=", "right": 1.1, "note": "⑧回踩缩量（当下量比≤1.1，主力锁仓）"},
-        ],
-    },
-    "exit": {
-        "logic": "any",
-        "conditions": [
-            {"left": "ush", "op": ">", "right": 0.4, "note": "力竭：长上影线"},
-            {"left": "vr", "op": "<", "right": 0.5, "within": 3, "note": "力竭：量能跟不上（近3日出现过极端缩量）"},
-            {
-                "logic": "all",
-                "conditions": [
-                    {"left": "body", "op": "<", "right": "body", "right_lag": 1, "note": "力竭：阳线实体越来越短"},
-                    {"left": "body", "op": ">", "right": 0},
-                ],
-                "note": "阳线但实体连续收窄",
-            },
-            {"left": "close", "op": "<", "right": "ma10", "note": "离场：跌破10日线"},
-            {"left": "close", "op": "<", "right": "box20", "right_factor": 0.95, "note": "离场：击穿箱体上沿5%（支撑失效）"},
-        ],
-    },
-    "risk": {"stop_loss_pct": 8.0, "max_hold_days": 30, "take_profit_pct": None},
-    "backtest_defaults": {
-        "start": "2025-01-01",
-        "end": "2026-09-18",
-        "initial_cash": 1000000,
-        "position_pct": 20,
-        "max_positions": 5,
-        "fee_bps": 2.5,
-        "stamp_tax_bps": 5.0,
-    },
-}
