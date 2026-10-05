@@ -1,15 +1,22 @@
-"""Tests for the screening engine with a fake DataService."""
-import copy
+"""Tests for the range-scan screening engine with a fake DataService."""
+from datetime import datetime
 
 import pytest
 
-from backend.screener import parse_as_of, screen
-from backend.schema import REFERENCE_STRATEGY, StrategyConfig
+from backend.fuyao import CST
+from backend.schema import ScreeningStrategy
+from backend.screener import parse_as_of, screen_range
+
+BASE_MS = parse_as_of("2025-01-01")  # CST 午夜，保证 date_ms ↔ yyyy-MM-dd 精确往返
 
 
-def simple_cfg():
-    """Simple crossover strategy: close > ma20 and vr >= 1.2 today."""
-    return StrategyConfig.parse_obj({
+def dstr(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=CST).strftime("%Y-%m-%d")
+
+
+def simple_strategy():
+    """Simple crossover strategy: close > ma20 and vr >= 1.2 (any day in range)."""
+    return ScreeningStrategy.parse_obj({
         "name": "站上20日线且放量",
         "description": "",
         "source_text": "",
@@ -23,24 +30,17 @@ def simple_cfg():
             {"left": "close", "op": ">", "right": "ma20", "note": "站上20日线"},
             {"left": "vr", "op": ">=", "right": 1.2, "note": "量比≥1.2"},
         ]},
-        "exit": {"logic": "any", "conditions": [
-            {"left": "close", "op": "<", "right": "ma20", "note": "跌破20日线"},
-        ]},
-        "risk": {"stop_loss_pct": 8.0, "max_hold_days": 30, "take_profit_pct": None},
-        "backtest_defaults": {
-            "start": "2025-01-01", "end": "2025-12-31", "initial_cash": 1000000,
-            "position_pct": 20, "max_positions": 5, "fee_bps": 2.5, "stamp_tax_bps": 5.0,
-        },
     })
 
 
-def make_bars(n, base=10.0, drift=0.05, vol=100.0, last_vol=None):
+def make_bars(n, base=10.0, drift=0.05, vol=100.0, spike=None):
+    """spike: {index -> volume}，在指定交易日放量（触发 vr>=1.2）。"""
     bars = []
     for i in range(n):
         close = base + i * drift
-        v = last_vol if (last_vol is not None and i == n - 1) else vol
+        v = spike.get(i, vol) if spike else vol
         bars.append({
-            "date_ms": 1_760_000_000_000 + i * 86_400_000,
+            "date_ms": BASE_MS + i * 86_400_000,
             "open": close - 0.1, "high": close + 0.2, "low": close - 0.3, "close": close,
             "volume": float(v), "turnover": close * v,
         })
@@ -68,84 +68,74 @@ class FakeData:
             bars = [b for b in bars if b["date_ms"] <= end_ms]
         return bars[-count:]
 
+    def get_bars_range(self, code, kind, start_ms, end_ms, warmup_bars=250):
+        p = self.patterns[code]
+        if isinstance(p, Exception):
+            raise p
+        return p  # fake：返回全部 K 线（含 warmup，无需按日期裁剪）
 
-def test_screen_matches_and_signals():
-    # AAA: rising trend + last-day volume surge → match; BBB: flat (below ma20) → no; CCC: surge but below ma20 → no
-    data = FakeData({
-        "600001.SH": make_bars(60, drift=0.2, last_vol=500),
-        "600002.SH": make_bars(60, drift=0.0),
-        "600003.SH": make_bars(60, base=20, drift=-0.2, last_vol=500),
-    })
-    result = screen(simple_cfg(), data, progress_cb=lambda d, t, c: data.progress_log.append((d, t, c)))
+
+def test_screen_range_matches_in_range():
+    # 上升趋势 + 第40天放量 → entry 在区间内第40天成立 → 入选且 signal_date 正确
+    bars = make_bars(60, drift=0.2, spike={40: 500.0})
+    data = FakeData({"600001.SH": bars})
+    start, end = dstr(bars[20]["date_ms"]), dstr(bars[59]["date_ms"])
+    result = screen_range(simple_strategy(), data, start, end)
     assert result["matched_count"] == 1
     m = result["matched"][0]
     assert m["thscode"] == "600001.SH"
+    assert m["signal_date"] == dstr(bars[40]["date_ms"])
     assert m["signals"] == ["站上20日线", "量比≥1.2"]
     assert m["snapshot"]["close"] > 0 and m["snapshot"]["ma20"] > 0 and m["snapshot"]["vr"] >= 1.2
-    assert result["evaluated"] == 3 and result["failed"] == 0
+    assert result["as_of"] == end
+    assert result["evaluated"] == 1 and result["failed"] == 0
     assert result["universe"]["name"] == "测试池"
-    assert result["as_of"] is not None
-    assert len(data.progress_log) == 3
 
 
-def test_screen_failure_resilience():
+def test_screen_range_outside_range_not_matched():
+    # 放量日（第40天）落在 [start,end] 之外 → 区间内 entry 永不成立 → 不入选
+    bars = make_bars(60, drift=0.2, spike={40: 500.0})
+    data = FakeData({"600001.SH": bars})
+    start, end = dstr(bars[45]["date_ms"]), dstr(bars[59]["date_ms"])
+    result = screen_range(simple_strategy(), data, start, end)
+    assert result["matched_count"] == 0
+    assert result["evaluated"] == 1 and result["failed"] == 0
+
+
+def test_screen_range_first_signal_dedup():
+    # 多天满足（第30、50天均放量）→ 只入选一次，signal_date 为最早命中日
+    bars = make_bars(60, drift=0.2, spike={30: 500.0, 50: 500.0})
+    data = FakeData({"600001.SH": bars})
+    start, end = dstr(bars[20]["date_ms"]), dstr(bars[59]["date_ms"])
+    result = screen_range(simple_strategy(), data, start, end)
+    assert result["matched_count"] == 1
+    assert result["matched"][0]["signal_date"] == dstr(bars[30]["date_ms"])
+
+
+def test_screen_range_progress_cb():
     data = FakeData({
-        "600001.SH": make_bars(60, drift=0.2, last_vol=500),
+        "600001.SH": make_bars(60, drift=0.2, spike={40: 500.0}),
+        "600002.SH": make_bars(60, drift=0.0),
+        "600003.SH": make_bars(60, base=20, drift=-0.2, spike={40: 500.0}),
+    })
+    start, end = dstr(BASE_MS + 20 * 86_400_000), dstr(BASE_MS + 59 * 86_400_000)
+    result = screen_range(simple_strategy(), data, start, end,
+                          progress_cb=lambda d, t, c: data.progress_log.append((d, t, c)))
+    assert len(data.progress_log) == 3
+    assert result["matched_count"] == 1  # 仅 600001 上升且放量
+
+
+def test_screen_range_failure_resilience():
+    data = FakeData({
+        "600001.SH": make_bars(60, drift=0.2, spike={40: 500.0}),
         "600002.SH": make_bars(10),  # too few bars → skipped (not failed)
         "600003.SH": RuntimeError("上游炸了"),
     })
-    result = screen(simple_cfg(), data)
+    start, end = dstr(BASE_MS + 20 * 86_400_000), dstr(BASE_MS + 59 * 86_400_000)
+    result = screen_range(simple_strategy(), data, start, end)
     assert result["matched_count"] == 1
     assert result["failed"] == 1
     assert result["evaluated"] == 2  # total 3 - failed 1
-
-
-def test_screen_as_of_slices_history():
-    rising = make_bars(60, drift=0.2, last_vol=500)
-    data = FakeData({"600001.SH": rising})
-    bars = rising
-    as_of_ms = bars[29]["date_ms"]
-    from backend.screener import parse_as_of
-    from datetime import datetime
-    from backend.fuyao import CST
-    d = datetime.fromtimestamp(as_of_ms / 1000, tz=CST)
-    as_of_str = d.strftime("%Y-%m-%d")
-    result = screen(simple_cfg(), data, as_of=as_of_str)
-    # early cutoff: only 30 bars, still >= MIN_BARS; trend exists; last bar volume is normal → no match
-    assert result["matched_count"] == 0
-    assert result["as_of"] == as_of_str
-
-
-def test_screen_reference_strategy_runs():
-    cfg = StrategyConfig.parse_obj(copy.deepcopy(REFERENCE_STRATEGY))
-    cfg = cfg.copy(update={"universe": type(cfg.universe).parse_obj({"type": "custom", "codes": ["600001.SH"]})})
-    # Build synthetic bars that could satisfy: decline, convergence, volume surge, recovery
-    bars = []
-    price = 100.0
-    for i in range(150):
-        if i < 80:
-            price *= 0.998  # slow decline
-        elif i < 100:
-            price *= 1.0  # consolidation (convergence)
-        elif i == 100:
-            price *= 1.02
-        else:
-            price *= 1.004
-        vol = 100.0
-        if 95 <= i <= 105:
-            vol = 250.0
-        if i >= 140:
-            vol = 90.0
-        bars.append({
-            "date_ms": 1_760_000_000_000 + i * 86_400_000,
-            "open": price * 0.999, "high": price * 1.005, "low": price * 0.994, "close": price,
-            "volume": vol, "turnover": price * vol,
-        })
-    data = FakeData({"600001.SH": bars})
-    result = screen(cfg, data)
-    # exact match depends on strict thresholds; the invariant is it runs and reports consistently
-    assert result["matched_count"] in (0, 1)
-    assert result["evaluated"] == 1
 
 
 def test_parse_as_of():
@@ -155,32 +145,3 @@ def test_parse_as_of():
     assert ms % 86_400_000 == 16 * 3600 * 1000  # CST midnight == UTC 16:00 previous day
     with pytest.raises(ValueError):
         parse_as_of("2026/06/30")
-
-
-def test_screen_v2_rules_strategy():
-    """v2 rules 策略（entry/exit 为 None）选股不崩 + 正确匹配开仓规则。"""
-    cfg = StrategyConfig.parse_obj({
-        "name": "v2 rules 选股",
-        "universe": {"type": "custom", "codes": ["600001.SH", "600002.SH"]},
-        "indicators": [{"id": "ma20", "kind": "MA", "of": "close", "n": 20}],
-        "rules": [
-            {"when": {"logic": "all", "conditions": [{"left": "close", "op": ">", "right": "ma20", "note": "站上20日线"}]},
-             "action": "buy", "size_pct": 100, "note": "站上买入"},
-            {"when": {"logic": "all", "conditions": [{"left": "close", "op": "<", "right": "ma20"}]},
-             "action": "sell", "size_pct": 100, "note": "跌破卖出"},
-            {"when": {"logic": "all", "conditions": [{"left": "pnl_pct", "op": "<=", "right": -5}]},
-             "action": "buy", "size_pct": 30, "max_times": 1, "note": "跌5%补仓（持仓期，不应作开仓）"},
-        ],
-        "risk": {"stop_loss_pct": None, "trailing_stop_pct": None, "max_hold_days": None, "take_profit_pct": None},
-        "backtest_defaults": {"start": "2025-01-01", "end": "2025-12-31", "initial_cash": 1000000,
-                              "position_pct": 20, "max_positions": 5, "fee_bps": 2.5, "stamp_tax_bps": 5.0},
-    })
-    data = FakeData({
-        "600001.SH": make_bars(60, drift=0.2),  # 上升 → close > ma20 → 命中
-        "600002.SH": make_bars(60, drift=0.0),  # 走平 → close ≈ ma20 → 不命中
-    })
-    result = screen(cfg, data)
-    assert result["evaluated"] == 2 and result["failed"] == 0
-    assert result["matched_count"] == 1
-    assert result["matched"][0]["thscode"] == "600001.SH"
-    assert result["matched"][0]["signals"] == ["站上20日线"]

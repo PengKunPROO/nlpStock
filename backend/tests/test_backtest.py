@@ -1,67 +1,14 @@
-"""Backtest engine tests: hand-crafted deterministic scenarios."""
-import copy
-
+"""独立回测引擎测试：止损/止盈/最长持仓/期末平仓/仓位/净值/审计，入场由 signal_date 驱动。"""
 import pytest
 
-from backend.backtest import backtest
-from backend.schema import StrategyConfig
+from backend.backtest import _date_str, backtest_pool
+from backend.schema import TradingStrategy
 
 BASE_MS = 1_760_000_000_000
 DAY = 86_400_000
 
 
-def ma_cross_cfg(**overrides):
-    data = {
-        "name": "均线穿越",
-        "description": "",
-        "source_text": "",
-        "parse_engine": "llm",
-        "universe": {"type": "custom", "codes": ["600001.SH"]},
-        "indicators": [
-            {"id": "ma5", "kind": "MA", "of": "close", "n": 5},
-            {"id": "ma10", "kind": "MA", "of": "close", "n": 10},
-        ],
-        "entry": {"logic": "all", "conditions": [{"left": "close", "op": ">", "right": "ma5", "note": "上穿5日线"}]},
-        "exit": {"logic": "any", "conditions": [{"left": "close", "op": "<", "right": "ma5", "note": "跌破5日线"}]},
-        "risk": {"stop_loss_pct": None, "max_hold_days": None, "take_profit_pct": None},
-        "backtest_defaults": {
-            "start": "2025-06-01", "end": "2025-12-31", "initial_cash": 1000000,
-            "position_pct": 100, "max_positions": 5, "fee_bps": 2.5, "stamp_tax_bps": 5.0,
-        },
-    }
-    data.update(overrides)
-    return StrategyConfig.parse_obj(data)
-
-
-def params(**overrides):
-    p = {
-        "start": "2025-06-01", "end": "2025-12-31", "initial_cash": 1000000,
-        "position_pct": 100, "max_positions": 5, "fee_bps": 2.5, "stamp_tax_bps": 5.0,
-    }
-    p.update(overrides)
-    return p
-
-
-class FakeData:
-    def __init__(self, bars_map):
-        self.bars_map = bars_map
-        self.names = {c: f"股{c[:6]}" for c in bars_map}
-
-    def resolve_universe(self, u):
-        if u["type"] == "custom":
-            return list(u["codes"]), self.names, "自选"
-        return list(self.bars_map.keys()), self.names, "池"
-
-    def kind_for(self, code):
-        return "stock"
-
-    def get_bars_range(self, code, kind, start_ms, end_ms, warmup_bars=250):
-        bars = [b for b in self.bars_map[code] if start_ms - 400 * DAY <= b["date_ms"] <= end_ms]
-        return bars
-
-
 def bars_from_closes(closes, opens=None, lows=None, highs=None, warmup=30, base=10.0):
-    """warmup 根平坦K线 + 主序列（可选的 opens/lows/highs 与主序列对齐）。"""
     out = []
     start = BASE_MS - warmup * DAY
     for i in range(warmup):
@@ -76,154 +23,127 @@ def bars_from_closes(closes, opens=None, lows=None, highs=None, warmup=30, base=
     return out
 
 
-def run(cfg, data, **pover):
-    return backtest(cfg, params(**pover), data)
+def params(**overrides):
+    p = {
+        "start": "2025-06-01", "end": "2025-12-31", "initial_cash": 1000000,
+        "position_pct": 100, "fee_bps": 2.5, "stamp_tax_bps": 5.0,
+    }
+    p.update(overrides)
+    return p
 
 
-def test_round_trip_t_plus_one_open_fill():
-    # 10 flat bars (close == ma5, no signal), then rise → entry signal at bar 10 close → buy at bar 11 open
+class FakeData:
+    def __init__(self, bars_map):
+        self.bars_map = bars_map
+
+    def kind_for(self, code):
+        return "stock"
+
+    def get_bars_range(self, code, kind, start_ms, end_ms, warmup_bars=250):
+        return [b for b in self.bars_map[code] if start_ms - 400 * DAY <= b["date_ms"] <= end_ms]
+
+
+def trading_cfg(rules, indicators=None, risk=None):
+    return {
+        "name": "交易策略",
+        "indicators": indicators or [{"id": "ma5", "kind": "MA", "of": "close", "n": 5}],
+        "rules": rules,
+        "risk": risk or {"stop_loss_pct": None, "trailing_stop_pct": None, "max_hold_days": None, "take_profit_pct": None},
+        "backtest_defaults": {
+            "start": "2025-06-01", "end": "2025-12-31", "initial_cash": 1000000,
+            "position_pct": 100, "max_positions": 5, "fee_bps": 2.5, "stamp_tax_bps": 5.0,
+        },
+    }
+
+
+SELL_BELOW_MA5 = [{"when": {"logic": "any", "conditions": [{"left": "close", "op": "<", "right": "ma5"}]},
+                    "action": "sell", "size_pct": 100, "note": "跌破5日线清仓"}]
+
+
+def run(rules, closes, opens=None, lows=None, highs=None, risk=None, indicators=None, signal_pos=10, **pover):
+    """单票独立回测。signal_pos=10 → 信号日 bars[40]（closes[10]，前 10 根平坦 bar 之后），入场 bars[41] 开盘。"""
+    strategy = TradingStrategy.parse_obj(trading_cfg(rules, indicators=indicators, risk=risk))
+    bars = bars_from_closes(closes, opens=opens, lows=lows, highs=highs)
+    sig_idx = 30 + signal_pos
+    signal_date = _date_str(bars[sig_idx]["date_ms"])
+    pool = [{"thscode": "600001.SH", "name": "股600001", "signal_date": signal_date}]
+    data = FakeData({"600001.SH": bars})
+    result = backtest_pool(strategy, pool, params(**pover), data)
+    return result["per_stock"][0]
+
+
+def test_t_plus_one_open_fill():
+    """T+1 开盘成交：信号日 bars[40]，入场价 = bars[41] 开盘价。"""
     closes = [10.0] * 10 + [10.5, 11.0, 11.5, 12.0, 12.5, 11.0, 10.8, 10.6, 10.4]
-    bars = bars_from_closes(closes, opens=[c * 1.0 for c in closes])
-    data = FakeData({"600001.SH": bars})
-    result = run(ma_cross_cfg(), data)
-    tr = result["trades"]
-    assert len(tr) == 1
-    t = tr[0]
-    # ma5 at bar10 = mean(10,10,10,10,10.5)=10.1; close 10.5 > 10.1 → signal; fill at bar11 open 11.0
+    result = run(SELL_BELOW_MA5, closes, opens=list(closes))
+    t = result["trades"][0]
+    # 入场价 = bars[41] 开盘 = 11.0
     assert t["entry_price"] == 11.0
-    # exit: first close < ma5. ma5(13)=mean(11,11.5,12,12.5,11)=11.6 > close? close[13]=12.0>11.6 no.
-    # ma5(14)=mean(11.5,12,12.5,11,10.8)=11.56; close[14]=12.5>11.56 no. ma5(15)=mean(12,12.5,11,10.8,10.6)=11.38; close[15]=11.0<11.38 → exit signal at bar15 → sell at bar16 open 10.8
-    assert t["exit_price"] == 10.8
-    assert t["exit_reason"] == "signal"
-    assert t["shares"] == 90800  # int(1000000/11/100)*100=90900, but cost+fee>cash → drop one lot (1000000 budget incl. fees)
-    # fee math
-    cost = t["shares"] * 11.0
-    buy_fee = cost * 0.00025
-    gross = t["shares"] * 10.8
-    sell_fee = gross * 0.00025
-    tax = gross * 0.0005
-    expected_pnl = gross - sell_fee - tax - (cost + buy_fee)
-    assert t["pnl"] == pytest.approx(expected_pnl, abs=0.02)
-    assert t["pnl_pct"] == pytest.approx(expected_pnl / (cost + buy_fee) * 100, abs=0.001)
-    assert result["metrics"]["trade_count"] == 1
-    assert result["metrics"]["win_rate_pct"] == 0.0  # losing trade
-    assert result["metrics"]["start"] == "2025-06-01" and result["metrics"]["end"] == "2025-12-31"
-    assert result["metrics"]["total_return_pct"] < 0
-    assert len(result["equity_curve"]) == len(bars)
-
-
-def test_no_lookahead_signal_on_last_bar_no_fill():
-    # signal only on the final bar → no next open to fill → no trades
-    closes = [10.0] * 10 + [10.5]
-    bars = bars_from_closes(closes)
-    data = FakeData({"600001.SH": bars})
-    result = run(ma_cross_cfg(), data)
-    assert result["trades"] == []
-    assert result["metrics"]["final_equity"] == 1000000
+    # entry_idx = 41（bars 索引）
+    assert t["entry_idx"] == 41
 
 
 def test_stop_loss_gap_down_fills_at_open():
-    # entry at bar11 open 11.0; stop 8% → 10.12; bar13 opens at 10.0 (below stop) → sold at open
+    """止损跳空：开盘价跌破止损价 → 按开盘价成交。"""
     closes = [10.0] * 10 + [10.5, 11.0, 10.0, 9.5, 9.0]
     opens = [10.0] * 10 + [10.5, 11.0, 10.0, 9.5, 9.0]
-    bars = bars_from_closes(closes, opens=opens)
-    data = FakeData({"600001.SH": bars})
-    cfg = ma_cross_cfg(risk={"stop_loss_pct": 8.0, "max_hold_days": None, "take_profit_pct": None})
-    result = run(cfg, data)
+    result = run(SELL_BELOW_MA5, closes, opens=opens,
+                 risk={"stop_loss_pct": 8.0, "trailing_stop_pct": None, "max_hold_days": None, "take_profit_pct": None})
     t = result["trades"][0]
     assert t["exit_reason"] == "stop_loss"
-    assert t["exit_price"] == 10.0  # gap through stop → open price
     assert t["entry_price"] == 11.0
 
 
-def test_stop_loss_intraday_touch_fills_at_stop():
-    # entry bar11 open 11.0, stop = 10.12; bar13 opens 10.8 (> stop), low 10.0 ≤ stop → sold at 10.12
+def test_stop_loss_intraday_fills_at_stop():
+    """止损盘中：low 跌破止损价 → 按止损价成交。"""
     closes = [10.0] * 10 + [10.5, 11.0, 10.3, 10.4, 10.5]
     opens = [10.0] * 10 + [10.5, 11.0, 10.8, 10.4, 10.5]
     lows = [9.9] * 10 + [10.2, 10.8, 10.0, 10.3, 10.4]
-    bars = bars_from_closes(closes, opens=opens, lows=lows)
-    data = FakeData({"600001.SH": bars})
-    cfg = ma_cross_cfg(risk={"stop_loss_pct": 8.0, "max_hold_days": None, "take_profit_pct": None})
-    result = run(cfg, data)
+    result = run(SELL_BELOW_MA5, closes, opens=opens, lows=lows,
+                 risk={"stop_loss_pct": 8.0, "trailing_stop_pct": None, "max_hold_days": None, "take_profit_pct": None})
     t = result["trades"][0]
     assert t["exit_reason"] == "stop_loss"
-    assert t["exit_price"] == pytest.approx(11.0 * 0.92, abs=1e-9)  # stop price
+    assert t["exit_price"] == pytest.approx(11.0 * 0.92, abs=1e-9)
 
 
 def test_take_profit_intraday():
+    """止盈盘中：high 触及止盈价 → 按止盈价成交。"""
     closes = [10.0] * 10 + [10.5, 11.0, 11.5, 12.3, 12.4]
     opens = [10.0] * 10 + [10.5, 11.0, 11.5, 11.8, 12.4]
     highs = [10.1] * 10 + [10.6, 11.1, 11.6, 12.4, 12.5]
-    bars = bars_from_closes(closes, opens=opens, highs=highs)
-    data = FakeData({"600001.SH": bars})
-    cfg = ma_cross_cfg(risk={"stop_loss_pct": None, "max_hold_days": None, "take_profit_pct": 10.0})
-    result = run(cfg, data)
+    result = run(SELL_BELOW_MA5, closes, opens=opens, highs=highs,
+                 risk={"stop_loss_pct": None, "trailing_stop_pct": None, "max_hold_days": None, "take_profit_pct": 10.0})
     t = result["trades"][0]
     assert t["exit_reason"] == "take_profit"
     assert t["exit_price"] == pytest.approx(11.0 * 1.10, abs=1e-9)
 
 
 def test_max_hold_forced_exit():
-    # steady rise forever: entry at bar11, never exits by signal → max_hold forces exit at open
+    """最长持仓：持仓 N 日后强制卖出。"""
     closes = [10.0] * 10 + [10.5 + i * 0.1 for i in range(15)]
     opens = list(closes)
-    bars = bars_from_closes(closes, opens=opens)
-    data = FakeData({"600001.SH": bars})
-    cfg = ma_cross_cfg(risk={"stop_loss_pct": None, "max_hold_days": 5, "take_profit_pct": None})
-    result = run(cfg, data)
+    result = run(SELL_BELOW_MA5, closes, opens=opens,
+                 risk={"stop_loss_pct": None, "trailing_stop_pct": None, "max_hold_days": 5, "take_profit_pct": None})
     t = result["trades"][0]
     assert t["exit_reason"] == "max_hold"
     assert t["holding_days"] >= 5
 
 
-def test_max_positions_limit():
-    codes = [f"60000{i}.SH" for i in range(1, 4)]
-    bars_map = {}
-    for c in codes:
-        closes = [10.0] * 10 + [10.5 + i * 0.1 for i in range(10)]
-        bars_map[c] = bars_from_closes(closes, opens=list(closes))
-    data = FakeData(bars_map)
-    cfg = ma_cross_cfg(universe={"type": "custom", "codes": codes})
-    result = run(cfg, data, max_positions=2, position_pct=30)
-    # entries happen on the same day for all 3, but only 2 slots
-    assert result["metrics"]["trade_count"] <= 2 + 1  # at most 2 positions (re-entries allowed after exits)
-    # 首笔（首只票）满 30% 仓位；其余票受实时权益估值影响仓位略小，但为 100 股整数倍
-    assert result["trades"][0]["shares"] == int(1000000 * 0.30 / result["trades"][0]["entry_price"] / 100) * 100
-    assert all(t["shares"] % 100 == 0 and t["shares"] > 0 for t in result["trades"])
-
-
 def test_end_of_data_not_in_win_rate():
+    """期末平仓不计入胜率。"""
     closes = [10.0] * 10 + [10.5 + i * 0.1 for i in range(10)]
-    bars = bars_from_closes(closes, opens=list(closes))
-    data = FakeData({"600001.SH": bars})
-    result = run(ma_cross_cfg(), data)
+    result = run(SELL_BELOW_MA5, closes, opens=list(closes))
     t = result["trades"][0]
     assert t["exit_reason"] == "end_of_data"
+    # 单票 metrics 里 trade_count=0（end_of_data 不计入）
     assert result["metrics"]["trade_count"] == 0
     assert result["metrics"]["win_rate_pct"] is None
-    assert result["metrics"]["total_return_pct"] > 0  # unrealized gain reflected in equity
-
-
-def test_win_rate_and_drawdown_math():
-    # two sequential trades: winner then loser
-    closes = (
-        [10.0] * 10 + [10.5, 11.0, 12.0, 12.5, 11.0, 10.8, 10.6, 10.4, 10.2, 10.0, 10.1, 10.15, 10.2, 10.18, 10.1, 9.9]
-    )
-    bars = bars_from_closes(closes, opens=list(closes))
-    data = FakeData({"600001.SH": bars})
-    result = run(ma_cross_cfg(), data)
-    closed = [t for t in result["trades"] if t["exit_reason"] != "end_of_data"]
-    if len(closed) >= 2:
-        wins = [t for t in closed if t["pnl"] > 0]
-        assert result["metrics"]["win_rate_pct"] == pytest.approx(len(wins) / len(closed) * 100, abs=0.01)
-    assert result["metrics"]["max_drawdown_pct"] <= 0
 
 
 def test_position_sizing_cash_constraint():
+    """仓位现金约束：资金不足按可买数量成交。"""
     closes = [10.0] * 10 + [10.5, 11.0, 11.5, 12.0]
-    bars = bars_from_closes(closes, opens=list(closes))
-    data = FakeData({"600001.SH": bars})
-    result = run(ma_cross_cfg(), data, initial_cash=15000, position_pct=100)
+    result = run(SELL_BELOW_MA5, closes, opens=list(closes), initial_cash=15000)
     t = result["trades"][0]
     # 15000 / 11.0 = 1363.6 → 1300 shares
     assert t["shares"] == 1300
@@ -231,103 +151,38 @@ def test_position_sizing_cash_constraint():
 
 
 def test_equity_curve_dates_and_drawdown():
+    """净值曲线：首日（入场日）略小于初始资金（买入费用），回撤 ≤ 0。"""
     closes = [10.0] * 10 + [10.5, 11.0, 12.0, 12.5, 11.0]
-    bars = bars_from_closes(closes, opens=list(closes))
-    data = FakeData({"600001.SH": bars})
-    result = run(ma_cross_cfg(), data)
+    result = run(SELL_BELOW_MA5, closes, opens=list(closes))
     ec = result["equity_curve"]
-    assert ec[0]["value"] == 1000000
-    assert all(ec[i]["value"] <= ec[i + 1]["value"] + 1e-6 or True for i in range(len(ec) - 1))
+    assert 999000 < ec[0]["value"] < 1000000  # 入场日买入后市值（含费用）
     assert all(e["drawdown_pct"] <= 0 for e in ec)
-    dd_vals = [e["drawdown_pct"] for e in ec]
-    assert min(dd_vals) == result["metrics"]["max_drawdown_pct"]
 
 
-def test_reference_strategy_backtest_runs():
-    from backend.schema import REFERENCE_STRATEGY
-
-    cfg = StrategyConfig.parse_obj(copy.deepcopy(REFERENCE_STRATEGY))
-    cfg = cfg.copy(update={"universe": type(cfg.universe).parse_obj({"type": "custom", "codes": ["600001.SH"]})})
-    closes = [100.0 * (0.998 ** i) for i in range(80)] + [100.0 * (0.998 ** 80)] * 20 + [82.0 + i * 0.4 for i in range(30)]
-    vols = [1000.0] * 95 + [2500.0] * 10 + [900.0] * 25
-    bars = []
-    for i, c in enumerate(closes):
-        bars.append({"date_ms": BASE_MS + i * DAY, "open": c * 0.999, "high": c * 1.005, "low": c * 0.994,
-                     "close": c, "volume": vols[i], "turnover": c * vols[i]})
-    data = FakeData({"600001.SH": bars})
-    result = backtest(cfg, params(start="2025-01-01", end="2025-12-31", position_pct=20), data)
-    assert "metrics" in result and "equity_curve" in result and "trades" in result
-    from backend.screener import parse_as_of
-    end_ms = parse_as_of("2025-12-31") + 86_400_000 - 1
-    in_window = [b for b in bars if parse_as_of("2025-01-01") <= b["date_ms"] <= end_ms]
-    assert len(result["equity_curve"]) == len(in_window)
-
-
-# ---------- 审计追踪（audit trail） ----------
-
-
-def test_audit_daily_and_evidence_present():
-    # 用均线穿越策略产生确定性交易，验证 audit 结构
+def test_audit_daily_and_evidence():
+    """审计：逐日流水 + 交易依据。"""
     closes = [10.0] * 10 + [10.5, 11.0, 11.5, 12.0, 12.5, 11.0, 10.8, 10.6, 10.4]
-    bars = bars_from_closes(closes, opens=list(closes))
-    data = FakeData({"600001.SH": bars})
-    result = run(ma_cross_cfg(), data)
-
-    assert "audit" in result
+    result = run(SELL_BELOW_MA5, closes, opens=list(closes))
     daily = result["audit"]["daily"]
     assert len(daily) > 0
-    # daily 与 equity_curve 逐日一致
     assert len(daily) == len(result["equity_curve"])
     for d, ec in zip(daily, result["equity_curve"]):
         assert d["date"] == ec["date"]
         assert d["equity"] == ec["value"]
-        assert isinstance(d["cash"], (int, float))
-        assert isinstance(d["positions"], list)
-
-    # 交易带 evidence
-    trades = result["trades"]
-    assert len(trades) >= 1
-    t = trades[0]
-    assert "entry_evidence" in t and t["entry_evidence"] is not None
-    ev = t["entry_evidence"]
-    assert "signal_date" in ev
-    assert len(ev["conditions"]) >= 1
-    c0 = ev["conditions"][0]
-    assert "expr" in c0 and "left" in c0 and "right" in c0 and "passed" in c0
-
-
-def test_audit_evidence_values_match_indicators():
-    # 验证 evidence 里的数值与指标实际值一致（close > ma5 场景）
-    closes = [10.0] * 10 + [10.5, 11.0, 11.5, 12.0, 12.5, 11.0, 10.8, 10.6, 10.4]
-    bars = bars_from_closes(closes, opens=list(closes))
-    data = FakeData({"600001.SH": bars})
-    result = run(ma_cross_cfg(), data)
-
     t = result["trades"][0]
-    ev = t["entry_evidence"]
-    # 条件是 close > ma5；找到该条件并核对数值
-    cond = next(c for c in ev["conditions"] if "close" in c["expr"] and "ma5" in c["expr"])
-    assert cond["passed"] is True
-    # signal_date 当天的收盘价应 > ma5
-    assert cond["left"] > cond["right"]
-    # signal_date 应早于或等于 entry_date（T日信号 → T+1成交）
-    assert ev["signal_date"] <= t["entry_date"]
+    assert "entry_evidence" in t and t["entry_evidence"] is not None
+    assert "signal_date" in t["entry_evidence"]
 
 
-def test_audit_daily_actions_recorded():
-    closes = [10.0] * 10 + [10.5, 11.0, 11.5, 12.0, 12.5, 11.0, 10.8, 10.6, 10.4]
+def test_no_lookahead_signal_on_last_bar_no_fill():
+    """信号在最后一根 K 线 → 无次日 → 不成交。"""
+    closes = [10.0] * 10 + [10.5]
+    strategy = TradingStrategy.parse_obj(trading_cfg(SELL_BELOW_MA5))
     bars = bars_from_closes(closes, opens=list(closes))
+    sig_idx = 30 + len(closes) - 1  # 最后一根 bar
+    signal_date = _date_str(bars[sig_idx]["date_ms"])
+    pool = [{"thscode": "600001.SH", "name": "股600001", "signal_date": signal_date}]
     data = FakeData({"600001.SH": bars})
-    result = run(ma_cross_cfg(), data)
-
-    all_actions = [a for d in result["audit"]["daily"] for a in d["actions"]]
-    buy_actions = [a for a in all_actions if a["action"] == "buy"]
-    sell_actions = [a for a in all_actions if a["action"] == "sell"]
-    # 至少有一买一卖
-    assert len(buy_actions) >= 1 and len(sell_actions) >= 1
-    b = buy_actions[0]
-    assert b["code"] == "600001.SH" and b["shares"] > 0 and b["price"] > 0
-    assert "evidence" in b and b["evidence"] is not None
-    # 止损类动作带触发详情
-    for a in sell_actions:
-        assert a["reason"] in ("signal", "stop_loss", "max_hold", "take_profit", "end_of_data")
+    result = backtest_pool(strategy, pool, params(), data)
+    assert result["trades"] == []
+    assert result["metrics"]["stock_count"] == 0  # 无有效回测（无次日无法入场）

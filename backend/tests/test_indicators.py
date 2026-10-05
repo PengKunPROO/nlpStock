@@ -216,24 +216,6 @@ def test_eval_group_verbose_within_and_none():
     assert out2["conditions"][0]["left"] is None
 
 
-def test_full_reference_strategy_pipeline_on_synthetic_bars():
-    """Reference strategy entry/exit evaluate without error on synthetic data."""
-    import copy
-
-    from backend.schema import REFERENCE_STRATEGY, StrategyConfig
-
-    cfg = StrategyConfig.parse_obj(copy.deepcopy(REFERENCE_STRATEGY))
-    specs = [IndicatorSpec.parse_obj(i) for i in cfg.dict()["indicators"]]
-    bars = make_bars([(10 + i * 0.1, 11 + i * 0.1, 9.9 + i * 0.1, 10.5 + i * 0.1, 100 + i * 37) for i in range(120)])
-    bars += make_bars([(20 - i * 0.2, 20.5 - i * 0.2, 18 - i * 0.2, 19 - i * 0.2, 90 + i * 5) for i in range(30)])
-    series = compute_indicators(bars, specs)
-    entry = ConditionGroup.parse_obj(cfg.dict()["entry"])
-    exit_ = ConditionGroup.parse_obj(cfg.dict()["exit"])
-    for i in range(0, len(bars), 7):
-        signal_at(entry, series, i)
-        signal_at(exit_, series, i)
-
-
 # ---------- 新技术指标（EMA / MACD / KDJ / RSI / BOLL，A 股口径） ----------
 
 

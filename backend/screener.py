@@ -1,15 +1,15 @@
-"""Stock screening engine: evaluate strategy entry conditions across a universe."""
+"""Stock screening engine: range scan — first day a strategy's entry fires inside [start, end]."""
 from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from .conditions import eval_condition
+from .conditions import eval_condition, signal_at
 from .data_service import DataService
 from .fuyao import CST
 from .indicators import compute_indicators
-from .schema import HOLD_FIELDS, ConditionGroup, LeafCondition, StrategyConfig
+from .schema import HOLD_FIELDS, ConditionGroup, LeafCondition, ScreeningStrategy
 
 MIN_BARS = 30
 
@@ -35,6 +35,10 @@ def parse_as_of(as_of: str | None) -> int | None:
     return int(datetime(d.year, d.month, d.day, tzinfo=CST).timestamp() * 1000)
 
 
+def _date_str(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=CST).strftime("%Y-%m-%d")
+
+
 def _collect_matched(group: ConditionGroup, series: dict, i: int, out: list[str]) -> bool:
     ok = eval_condition(group, series, i)
     if not ok:
@@ -49,8 +53,8 @@ def _collect_matched(group: ConditionGroup, series: dict, i: int, out: list[str]
     return True
 
 
-def _referenced_ids(cfg: StrategyConfig) -> list[str]:
-    ids = set()
+def _referenced_ids(strategy: ScreeningStrategy) -> list[str]:
+    ids: set[str] = set()
 
     def walk(conds):
         for c in conds:
@@ -62,10 +66,8 @@ def _referenced_ids(cfg: StrategyConfig) -> list[str]:
                 if isinstance(c.right, str) and c.right in cfg_ids:
                     ids.add(c.right)
 
-    cfg_ids = {ind.id for ind in cfg.indicators}
-    # v2：遍历 rules 的 when 条件（v1 entry/exit 已由兼容层转成 rules）
-    for rule in cfg.rules or []:
-        walk(rule.when.conditions)
+    cfg_ids = {ind.id for ind in strategy.indicators}
+    walk(strategy.entry.conditions)
     return sorted(ids)
 
 
@@ -92,95 +94,85 @@ def _forward_return(bars: list[dict], sig_idx: int, n_days: int) -> float | None
     return round((bars[tgt]["close"] / base - 1) * 100, 2)
 
 
-def screen(
-    cfg: StrategyConfig,
+def _benchmark_forward(benchmark_closes: list[tuple[int, float]], sig_ms: int, n_days: int) -> float | None:
+    """基准从信号日 → n_days 个交易日后的涨跌%。"""
+    if not benchmark_closes:
+        return None
+    idx = None
+    for j, (ms, _) in enumerate(benchmark_closes):
+        if ms == sig_ms:
+            idx = j
+            break
+        if ms > sig_ms:
+            idx = j - 1 if j > 0 else None
+            break
+    if idx is None or idx + n_days >= len(benchmark_closes):
+        return None
+    base = benchmark_closes[idx][1]
+    if not base:
+        return None
+    return round((benchmark_closes[idx + n_days][1] / base - 1) * 100, 2)
+
+
+def screen_range(
+    strategy: ScreeningStrategy,
     data: DataService,
-    as_of: str | None = None,
+    start: str,
+    end: str,
     count: int = 250,
     max_workers: int = 6,
     progress_cb=None,
 ) -> dict:
+    """区间扫描选股：在 [start, end] 内首次满足 entry 即入选（去重，记录 signal_date）。"""
     started = time.monotonic()
-    end_ms = parse_as_of(as_of)
-    codes, names, label = data.resolve_universe(cfg.universe.dict())
-    specs = cfg.indicators
-    ref_ids = _referenced_ids(cfg)
-    # v2 选股 = 评估开仓规则（buy 且不引用持仓状态字段），等价 v1 的 entry
-    open_rules = [r for r in (cfg.rules or []) if r.action == "buy" and not _refs_hold(r.when)]
-
-    # 大盘基准（沪深300）：信号追踪对照
-    benchmark_closes: list[tuple[int, float]] = []
-    try:
-        bench_bars = data.get_bars("000300.SH", kind="index", count=count + 60)
-        benchmark_closes = [(b["date_ms"], b["close"]) for b in bench_bars]
-    except Exception:
-        pass
-
-    def _benchmark_forward(sig_ms: int, n_days: int) -> float | None:
-        """基准从信号日 → n_days 个交易日后的涨跌%。"""
-        if not benchmark_closes:
-            return None
-        # 找信号日在基准中的位置
-        idx = None
-        for j, (ms, _) in enumerate(benchmark_closes):
-            if ms == sig_ms:
-                idx = j
-                break
-            if ms > sig_ms:
-                idx = j - 1 if j > 0 else None
-                break
-        if idx is None or idx + n_days >= len(benchmark_closes):
-            return None
-        base = benchmark_closes[idx][1]
-        if not base:
-            return None
-        return round((benchmark_closes[idx + n_days][1] / base - 1) * 100, 2)
+    start_ms = parse_as_of(start)
+    end_ms = parse_as_of(end) + 86_400_000 - 1  # inclusive end of day
+    codes, names, label = data.resolve_universe(strategy.universe.dict())
+    specs = strategy.indicators
+    entry = strategy.entry
+    ref_ids = _referenced_ids(strategy)
 
     matched: list[dict] = []
-    state = {"done": 0, "failed": 0, "last_date": 0}
+    state = {"done": 0, "failed": 0}
 
     def work(code: str):
         kind = data.kind_for(code)
-        # as_of 为历史日期时取到最新（含信号日之后数据用于信号追踪）
-        bars = data.get_bars(code, kind=kind, count=count + 60)
+        bars = data.get_bars_range(code, kind, start_ms, end_ms, warmup_bars=count)
         if len(bars) < MIN_BARS:
             return None
-        if as_of:
-            i = _find_as_of_index(bars, end_ms)
-            if i is None or i < 30:
-                return None
-        else:
-            i = len(bars) - 1
-        series = compute_indicators(bars[: i + 1], specs)
-        notes: list[str] = []
-        hit = False
-        for rule in open_rules:  # 任一开仓规则命中即入选
-            if _collect_matched(rule.when, series, i, notes):
-                hit = True
-                break
-        if not hit:
+        series = compute_indicators(bars, specs)
+        hi = _find_as_of_index(bars, end_ms)
+        if hi is None:
             return None
-        snapshot = {"close": round(bars[i]["close"], 4)}
-        for rid in ref_ids:
-            v = series[rid][i]
-            snapshot[rid] = round(v, 4) if v is not None else None
-        change_pct = None
-        if i > 0 and bars[i - 1]["close"]:
-            change_pct = round((bars[i]["close"] / bars[i - 1]["close"] - 1) * 100, 3)
-        sig_ms = bars[i]["date_ms"]
-        return {
-            "thscode": code,
-            "name": names.get(code) or code,
-            "last_close": bars[i]["close"],
-            "change_pct": change_pct,
-            "signals": notes,
-            "snapshot": snapshot,
-            "last_date_ms": sig_ms,
-            "chg_5d": _forward_return(bars, i, 5),
-            "chg_20d": _forward_return(bars, i, 20),
-            "bench_5d": _benchmark_forward(sig_ms, 5),
-            "bench_20d": _benchmark_forward(sig_ms, 20),
-        }
+        lo = 0
+        while lo < len(bars) and bars[lo]["date_ms"] < start_ms:
+            lo += 1
+        if lo > hi:
+            return None
+        for i in range(lo, hi + 1):
+            if not signal_at(entry, series, i):
+                continue
+            notes: list[str] = []
+            _collect_matched(entry, series, i, notes)
+            snapshot = {"close": round(bars[i]["close"], 4)}
+            for rid in ref_ids:
+                v = series[rid][i]
+                snapshot[rid] = round(v, 4) if v is not None else None
+            change_pct = None
+            if i > 0 and bars[i - 1]["close"]:
+                change_pct = round((bars[i]["close"] / bars[i - 1]["close"] - 1) * 100, 3)
+            sig_ms = bars[i]["date_ms"]
+            return {
+                "thscode": code,
+                "name": names.get(code) or code,
+                "signal_date": _date_str(sig_ms),
+                "last_close": bars[i]["close"],
+                "change_pct": change_pct,
+                "signals": notes,
+                "snapshot": snapshot,
+                "last_date_ms": sig_ms,
+            }
+        return None
 
     total = len(codes)
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -194,21 +186,17 @@ def screen(
                 state["failed"] += 1
             if res is not None:
                 matched.append(res)
-                state["last_date"] = max(state["last_date"], res["last_date_ms"])
             state["done"] += 1
             if progress_cb:
                 progress_cb(state["done"], total, code)
 
-    matched.sort(key=lambda m: (m["change_pct"] is None, -(m["change_pct"] or 0)))
-    as_of_out = as_of or (
-        datetime.fromtimestamp(state["last_date"] / 1000, tz=CST).strftime("%Y-%m-%d") if state["last_date"] else None
-    )
+    matched.sort(key=lambda m: (m["signal_date"], m["thscode"]))
     return {
-        "as_of": as_of_out,
+        "as_of": end,
         "evaluated": total - state["failed"],
         "failed": state["failed"],
         "matched_count": len(matched),
         "duration_ms": int((time.monotonic() - started) * 1000),
-        "universe": {"type": cfg.universe.type, "code": cfg.universe.code, "name": label},
+        "universe": {"type": strategy.universe.type, "code": strategy.universe.code, "name": label},
         "matched": matched,
     }
