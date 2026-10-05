@@ -3,23 +3,28 @@ package com.strategystock.app
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.os.Bundle
-import android.webkit.WebView
+import android.util.Log
+import android.webkit.ConsoleMessage
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlin.concurrent.thread
 
 /**
  * 自闭环 App 壳：Activity 内嵌 Python 后端（Chaquopy）+ WebView 前端，无 Termux 依赖。
  *
- * 启动流程（全部在 py-server 线程）：
- *  1. Python.start —— 必须与 uvicorn 服务同线程（该线程成为 Python 主线程，否则 set_wakeup_fd 报错）
- *  2. copyAssetsFrontend —— 把 assets 里的前端复制到私有目录（StaticFiles 需要真实文件路径）
- *  3. main.start_server —— 启动 FastAPI（端口由 OS 分配，返回实际端口）
- *  4. loadWhenReady —— 轮询 /api/health 就绪后加载 WebView（前端 fetch 相对路径，天然同源）
+ * 启动流程（两个线程）：
+ *  - py-server：Python.start（必须与 uvicorn 服务同线程，该线程成为 Python 主线程）
+ *               → copyAssetsFrontend → main.start_server（阻塞运行 server.run）
+ *  - wait-ready：socket 探测 8123 端口，服务就绪后切主线程 loadUrl（避免时序竞态）
  */
 class MainActivity : Activity() {
     private lateinit var webView: WebView
@@ -32,15 +37,18 @@ class MainActivity : Activity() {
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
+            cacheMode = WebSettings.LOAD_NO_CACHE  // 不缓存：确保加载最新前端，避免旧 index.html（含 API_BASE 注入）被缓存
         }
+        webView.clearCache(true)  // 清除历史缓存（首次可能缓存过含注入的旧页面）
         webView.webViewClient = object : WebViewClient() {
-            private var retries = 0
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                // 后端未就绪（连接拒绝）时自动重试，直到 uvicorn 起来（最多 60 次 × 1s）
-                if (request?.isForMainFrame == true && retries < 60) {
-                    retries++
-                    view?.postDelayed({ view.loadUrl(BASE_URL) }, 1000)
-                }
+                Log.e("WebNav", "加载失败: code=${error?.errorCode} desc=${error?.description} url=${request?.url}")
+            }
+        }
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
+                Log.i("WebConsole", "[${msg.messageLevel()}] ${msg.message()}")
+                return true
             }
         }
 
@@ -54,25 +62,51 @@ class MainActivity : Activity() {
             // 否则 Android 的 SelectorEventLoop 会报 set_wakeup_fd 错误（见 main.py 注释）
             py.getModule("main").callAttr("start_server", filesDir, frontendDir)
         }
+        thread(name = "wait-ready") {
+            waitAndLoad()
+        }
+    }
 
-        // 主线程立即加载，服务未就绪时的失败由 onReceivedError 自动重试兜底
-        webView.loadUrl(BASE_URL)
+    /** HTTP 探测 health 200（服务完全就绪），成功才加载 WebView（最多 30s，超时也尝试）。 */
+    private fun waitAndLoad() {
+        for (i in 0..149) {
+            if (isHealthOk()) {
+                Log.i("WebBoot", "health 200 就绪（第 ${i + 1} 次探测），加载 WebView")
+                runOnUiThread { webView.loadUrl(BASE_URL) }
+                return
+            }
+            Thread.sleep(200)
+        }
+        Log.w("WebBoot", "30 秒超时，服务未就绪，强制加载")
+        runOnUiThread { webView.loadUrl(BASE_URL) }  // 超时兜底（显示连接错误页）
+    }
+
+    /** 用 HttpURLConnection 请求 /api/health，返回 200 才算服务就绪（比 socket TCP 探测更严格）。 */
+    private fun isHealthOk(): Boolean {
+        return try {
+            val conn = URL("http://localhost:8123/api/health").openConnection() as HttpURLConnection
+            conn.connectTimeout = 500
+            conn.readTimeout = 500
+            val ok = conn.responseCode == 200
+            conn.disconnect()
+            ok
+        } catch (e: Exception) {
+            false
+        }
     }
 
     companion object {
-        private const val BASE_URL = "http://127.0.0.1:8123/"  // 与 main.py 的 _PORT 一致
+        // 用 localhost（而非 127.0.0.1）：Android 优先 IPv6 把 loopback 解析为 ::1，
+        // localhost 让系统动态解析到与 uvicorn（绑定 "::" 双栈）一致的地址
+        private const val BASE_URL = "http://localhost:8123/"
     }
 
-    /** 首次启动/版本升级时把 assets 里的前端复制到私有目录。 */
+    /** 每次启动重新复制 assets 里的前端到私有目录（确保前端最新，避免版本 marker 残留旧文件）。 */
     private fun copyAssetsFrontend(targetDirPath: String) {
         val targetDir = File(targetDirPath)
-        val version = packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
-        val marker = File(targetDir, ".version")
-        if (marker.exists() && marker.readText() == version) return
         if (targetDir.exists()) targetDir.deleteRecursively()
         targetDir.mkdirs()
         copyAssetDir("", targetDir)
-        marker.writeText(version)
     }
 
     private fun copyAssetDir(path: String, target: File) {
