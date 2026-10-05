@@ -35,9 +35,10 @@ android {
     sourceSets {
         main {
             python {
-                // Python 启动桥（main.py）+ 仓库 backend 包（相对本文件：deploy/android/app → 根仓库）
-                srcDirs = ["src/main/python", "../../../backend"]
-                exclude "tests/**"  // 测试包不进 APK
+                // main.py 启动桥 + 由 preparePythonBackend 任务生成的 backend 包（保留包结构）
+                // 注：不能直接把 srcDirs 指向 backend 目录——Chaquopy 会把其内容平铺到
+                // import 根，导致 `import backend` 找不到包（ModuleNotFoundError）
+                srcDirs = ["src/main/python", "build/python-backend"]
             }
             // 前端静态文件作为 assets 根（由 prepareFrontendAssets 任务生成，排除 dev/）
             assets.srcDirs += ["build/frontend-assets"]
@@ -62,4 +63,19 @@ tasks.register('prepareFrontendAssets', Copy) {
     from("../../../frontend") { exclude "dev/**" }
     into("build/frontend-assets")
 }
-preBuild.dependsOn 'prepareFrontendAssets'
+
+// 构建前把 backend/（排除 tests/）拷到 build/python-backend/backend，保留包结构供 `import backend`
+tasks.register('preparePythonBackend', Copy) {
+    from("../../../backend") { exclude "tests/**" }
+    into("build/python-backend/backend")
+}
+
+preBuild.dependsOn 'prepareFrontendAssets', 'preparePythonBackend'
+
+// merge*PythonSources 读取 build/python-backend（preparePythonBackend 的输出），
+// Gradle 8 严格校验要求显式声明依赖（assets 的 prepareFrontendAssets 由 Android 插件隐式处理，Python 则需手动声明）
+tasks.configureEach {
+    if (name.startsWith('merge') && name.endsWith('PythonSources')) {
+        dependsOn 'preparePythonBackend'
+    }
+}

@@ -4,12 +4,12 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.os.Bundle
 import android.webkit.WebView
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebViewClient
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 import kotlin.concurrent.thread
 
 /**
@@ -33,7 +33,16 @@ class MainActivity : Activity() {
             javaScriptEnabled = true
             domStorageEnabled = true
         }
-        webView.webViewClient = WebViewClient()
+        webView.webViewClient = object : WebViewClient() {
+            private var retries = 0
+            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                // 后端未就绪（连接拒绝）时自动重试，直到 uvicorn 起来（最多 60 次 × 1s）
+                if (request?.isForMainFrame == true && retries < 60) {
+                    retries++
+                    view?.postDelayed({ view.loadUrl(BASE_URL) }, 1000)
+                }
+            }
+        }
 
         thread(name = "py-server") {
             if (!Python.isStarted()) Python.start(AndroidPlatform(this@MainActivity))
@@ -45,9 +54,13 @@ class MainActivity : Activity() {
             // 否则 Android 的 SelectorEventLoop 会报 set_wakeup_fd 错误（见 main.py 注释）
             py.getModule("main").callAttr("start_server", filesDir, frontendDir)
         }
-        thread(name = "wait-ready") {
-            loadWhenReady()  // 后台轮询健康检查，通了再切主线程 loadUrl（避免主线程 sleep 导致 ANR）
-        }
+
+        // 主线程立即加载，服务未就绪时的失败由 onReceivedError 自动重试兜底
+        webView.loadUrl(BASE_URL)
+    }
+
+    companion object {
+        private const val BASE_URL = "http://127.0.0.1:8123/"  // 与 main.py 的 _PORT 一致
     }
 
     /** 首次启动/版本升级时把 assets 里的前端复制到私有目录。 */
@@ -77,24 +90,6 @@ class MainActivity : Activity() {
                 }
             }
         }
-    }
-
-    /** 等后端就绪（首次启动含 Python 初始化 + SQLite），最多 30s，之后加载页面。 */
-    private fun loadWhenReady() {
-        val base = "http://127.0.0.1:8123"  // 与 main.py 的 _PORT 一致
-        for (i in 0..149) {
-            try {
-                val conn = URL("$base/api/health").openConnection() as HttpURLConnection
-                conn.connectTimeout = 300
-                conn.readTimeout = 300
-                val ok = conn.responseCode == 200
-                conn.disconnect()
-                if (ok) break
-            } catch (_: Exception) {
-            }
-            Thread.sleep(200)
-        }
-        runOnUiThread { webView.loadUrl("$base/") }
     }
 
     @Deprecated("Deprecated in Java")
