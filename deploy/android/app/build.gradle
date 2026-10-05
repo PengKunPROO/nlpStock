@@ -1,0 +1,63 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'com.chaquo.python'
+}
+
+android {
+    namespace 'com.strategystock.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.strategystock.app"
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName "1.0.0"
+        ndk {
+            // 真机 arm64；如需模拟器调试，追加 "x86_64"
+            abiFilters "arm64-v8a"
+        }
+        python {
+            version "3.10"
+            pip {
+                // 与根 requirements.txt 保持一致（pydantic v1 是 Chaquopy 的硬约束）
+                install "fastapi==0.115.14"
+                install "pydantic==1.10.26"
+                install "uvicorn==0.30.6"
+                install "httpx==0.27.2"
+            }
+        }
+    }
+
+    sourceSets {
+        main {
+            python {
+                // Python 启动桥（main.py）+ 仓库 backend 包（相对本文件：deploy/android/app → 根仓库）
+                srcDirs = ["src/main/python", "../../../backend"]
+                exclude "tests/**"  // 测试包不进 APK
+            }
+            // 前端静态文件作为 assets 根（由 prepareFrontendAssets 任务生成，排除 dev/）
+            assets.srcDirs += ["build/frontend-assets"]
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+}
+
+// 构建前把 frontend/（排除 dev/ 预览目录）拷进 assets 源目录
+tasks.register('prepareFrontendAssets', Copy) {
+    from("../../../frontend") { exclude "dev/**" }
+    into("build/frontend-assets")
+}
+preBuild.dependsOn 'prepareFrontendAssets'

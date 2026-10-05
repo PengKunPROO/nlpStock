@@ -26,6 +26,16 @@ frontend/dev/qa/
 deploy/apk/node_modules/
 deploy/apk/android/
 
+# Android 工程（Chaquopy）构建产物
+deploy/android/.gradle/
+deploy/android/build/
+deploy/android/app/build/
+deploy/android/local.properties
+deploy/android/.cxx/
+
+# IDE
+.idea/
+
 # 操作系统
 .DS_Store
 Thumbs.db

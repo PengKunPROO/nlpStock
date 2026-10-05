@@ -19,8 +19,17 @@ MAX_ROUNDS = 4
 
 
 def make_ssl_context() -> ssl.SSLContext:
-    """TLS 1.3 与部分 CDN 边缘节点存在间歇性握手中断（EOF），强制降级到 TLS 1.2 规避。"""
-    ctx = ssl.create_default_context()
+    """TLS 1.3 与部分 CDN 边缘节点存在间歇性握手中断（EOF），强制降级到 TLS 1.2 规避。
+
+    CA 来源优先 certifi（Android/Chaquopy 无系统 CA 路径，certifi 随 httpx 安装）；
+    无 certifi 时回退系统默认（PC/Termux 场景）。
+    """
+    try:
+        import certifi
+
+        ctx = ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        ctx = ssl.create_default_context()
     ctx.maximum_version = ssl.TLSVersion.TLSv1_2
     return ctx
 
