@@ -30,7 +30,7 @@ def ma_cross_cfg(**overrides):
         },
     }
     data.update(overrides)
-    return StrategyConfig.model_validate(data)
+    return StrategyConfig.parse_obj(data)
 
 
 def params(**overrides):
@@ -246,8 +246,8 @@ def test_equity_curve_dates_and_drawdown():
 def test_reference_strategy_backtest_runs():
     from backend.schema import REFERENCE_STRATEGY
 
-    cfg = StrategyConfig.model_validate(copy.deepcopy(REFERENCE_STRATEGY))
-    cfg = cfg.model_copy(update={"universe": type(cfg.universe).model_validate({"type": "custom", "codes": ["600001.SH"]})})
+    cfg = StrategyConfig.parse_obj(copy.deepcopy(REFERENCE_STRATEGY))
+    cfg = cfg.copy(update={"universe": type(cfg.universe).parse_obj({"type": "custom", "codes": ["600001.SH"]})})
     closes = [100.0 * (0.998 ** i) for i in range(80)] + [100.0 * (0.998 ** 80)] * 20 + [82.0 + i * 0.4 for i in range(30)]
     vols = [1000.0] * 95 + [2500.0] * 10 + [900.0] * 25
     bars = []

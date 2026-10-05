@@ -87,7 +87,7 @@ def screen(
 ) -> dict:
     started = time.monotonic()
     end_ms = parse_as_of(as_of)
-    codes, names, label = data.resolve_universe(cfg.universe.model_dump())
+    codes, names, label = data.resolve_universe(cfg.universe.dict())
     specs = cfg.indicators
     ref_ids = _referenced_ids(cfg)
 

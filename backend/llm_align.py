@@ -302,5 +302,5 @@ class DeepSeekAligner:
         cfg = dict(raw)
         cfg["parse_engine"] = "llm"
         cfg["source_text"] = messages[0]["content"]
-        validated = StrategyConfig.model_validate(cfg)
-        return validated.model_dump()
+        validated = StrategyConfig.parse_obj(cfg)
+        return validated.dict()

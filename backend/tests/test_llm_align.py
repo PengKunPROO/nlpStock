@@ -64,7 +64,7 @@ def test_config_round_validates_and_fills_source():
     assert out["config"]["universe"]["code"] == "000300.SH"
     assert out["warnings"] == ["止损默认8%"]
     from backend.schema import StrategyConfig
-    StrategyConfig.model_validate(out["config"])
+    StrategyConfig.parse_obj(out["config"])
 
 
 def test_invalid_config_retries_then_succeeds():

@@ -6,7 +6,7 @@ from backend.schema import REFERENCE_STRATEGY, IndicatorSpec, StrategyConfig
 
 
 def test_reference_strategy_is_valid():
-    cfg = StrategyConfig.model_validate(REFERENCE_STRATEGY)
+    cfg = StrategyConfig.parse_obj(REFERENCE_STRATEGY)
     assert cfg.name == "阴跌急跌·止跌反转·回踩进场"
     assert len(cfg.indicators) == 12
     assert len(cfg.entry.conditions) == 8
@@ -16,8 +16,8 @@ def test_reference_strategy_is_valid():
 
 
 def test_reference_strategy_roundtrip_dict():
-    cfg = StrategyConfig.model_validate(REFERENCE_STRATEGY)
-    again = StrategyConfig.model_validate(cfg.model_dump())
+    cfg = StrategyConfig.parse_obj(REFERENCE_STRATEGY)
+    again = StrategyConfig.parse_obj(cfg.dict())
     assert again == cfg
 
 
@@ -73,13 +73,13 @@ def _mutate(**overrides):
 )
 def test_invalid_variants_rejected(override):
     with pytest.raises(ValidationError):
-        StrategyConfig.model_validate(_mutate(**override))
+        StrategyConfig.parse_obj(_mutate(**override))
 
 
 def test_duplicate_indicator_ids_rejected():
     data = _mutate(**{"indicators.1.id": "ma5"})
     with pytest.raises(ValidationError, match="unique"):
-        StrategyConfig.model_validate(data)
+        StrategyConfig.parse_obj(data)
 
 
 def test_nested_depth_three_rejected():
@@ -89,7 +89,7 @@ def test_nested_depth_three_rejected():
         ]
     })
     with pytest.raises(ValidationError, match="nesting"):
-        StrategyConfig.model_validate(data)
+        StrategyConfig.parse_obj(data)
 
 
 def test_nested_group_two_levels_allowed():
@@ -99,30 +99,30 @@ def test_nested_group_two_levels_allowed():
             {"left": "close", "op": ">", "right": 0},
         ]
     })
-    cfg = StrategyConfig.model_validate(data)
+    cfg = StrategyConfig.parse_obj(data)
     assert len(cfg.exit.conditions) == 5
 
 
 def test_exit_may_be_empty():
     data = _mutate(**{"exit.conditions": []})
-    cfg = StrategyConfig.model_validate(data)
+    cfg = StrategyConfig.parse_obj(data)
     assert cfg.exit.conditions == []
 
 
 def test_thscode_formats():
     ok = _mutate(**{"universe.type": "custom", "universe.codes": ["600519.SH", "000001.SZ", "430001.BJ", "886042.TI"]})
-    StrategyConfig.model_validate(ok)
+    StrategyConfig.parse_obj(ok)
     bad = _mutate(**{"universe.type": "custom", "universe.codes": ["600519"]})
     with pytest.raises(ValidationError):
-        StrategyConfig.model_validate(bad)
+        StrategyConfig.parse_obj(bad)
 
 
 def test_numeric_right_and_string_right():
     data = _mutate(**{"entry.conditions.4.right": 1234.5})
-    cfg = StrategyConfig.model_validate(data)
+    cfg = StrategyConfig.parse_obj(data)
     assert cfg.entry.conditions[4].right == 1234.5
     data2 = _mutate(**{"entry.conditions.0.right": "chg5"})
-    cfg2 = StrategyConfig.model_validate(data2)
+    cfg2 = StrategyConfig.parse_obj(data2)
     assert cfg2.entry.conditions[0].right == "chg5"
 
 
@@ -145,7 +145,7 @@ def test_new_indicator_kinds_valid():
         {"id": "boll_low", "kind": "BOLL_LOW", "n": 26, "k": 2.5},
     ]
     for spec in ok:
-        IndicatorSpec.model_validate(spec)
+        IndicatorSpec.parse_obj(spec)
 
 
 @pytest.mark.parametrize(
@@ -168,11 +168,11 @@ def test_new_indicator_kinds_valid():
 )
 def test_new_indicator_kinds_rejected(spec):
     with pytest.raises(ValidationError):
-        IndicatorSpec.model_validate(spec)
+        IndicatorSpec.parse_obj(spec)
 
 
 def test_macd_cross_strategy_config_validates():
-    cfg = StrategyConfig.model_validate({
+    cfg = StrategyConfig.parse_obj({
         "name": "MACD金叉",
         "universe": {"type": "custom", "codes": ["600519.SH"]},
         "indicators": [
@@ -219,7 +219,7 @@ def _nested_cfg(indicators):
 
 
 def test_indicator_of_reference_valid():
-    cfg = StrategyConfig.model_validate(_nested_cfg([
+    cfg = StrategyConfig.parse_obj(_nested_cfg([
         {"id": "dif", "kind": "MACD_DIF", "of": "close", "fast": 12, "slow": 26, "signal": 9},
         {"id": "difma5", "kind": "MA", "of": "dif", "n": 5},
     ]))
@@ -228,28 +228,28 @@ def test_indicator_of_reference_valid():
 
 def test_indicator_of_reference_unknown_rejected():
     with pytest.raises(ValidationError, match="unknown"):
-        StrategyConfig.model_validate(_nested_cfg([
+        StrategyConfig.parse_obj(_nested_cfg([
             {"id": "difma5", "kind": "MA", "of": "notexist", "n": 5},
         ]))
 
 
 def test_indicator_of_reference_self_rejected():
     with pytest.raises(ValidationError, match="cycle"):
-        StrategyConfig.model_validate(_nested_cfg([
+        StrategyConfig.parse_obj(_nested_cfg([
             {"id": "a", "kind": "MA", "of": "a", "n": 5},
         ]))
 
 
 def test_indicator_of_reference_cycle_rejected():
     with pytest.raises(ValidationError, match="cycle"):
-        StrategyConfig.model_validate(_nested_cfg([
+        StrategyConfig.parse_obj(_nested_cfg([
             {"id": "a", "kind": "MA", "of": "b", "n": 5},
             {"id": "b", "kind": "MA", "of": "a", "n": 5},
         ]))
 
 
 def test_indicator_ema_of_indicator_valid():
-    cfg = StrategyConfig.model_validate(_nested_cfg([
+    cfg = StrategyConfig.parse_obj(_nested_cfg([
         {"id": "kdjk", "kind": "KDJ_K", "n": 9},
         {"id": "kdjkma", "kind": "EMA", "of": "kdjk", "n": 5},
     ]))

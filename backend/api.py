@@ -5,7 +5,7 @@ from typing import Any, Optional, Union
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, conlist
 
 from .backtest import backtest
 from .data_service import DataService
@@ -49,7 +49,7 @@ class SettingsUpdate(BaseModel):
 
 
 class ParseRequest(BaseModel):
-    messages: list[dict] = Field(min_length=1)
+    messages: conlist(dict, min_items=1)  # type: ignore[valid-type]
 
 
 class StrategyCreate(BaseModel):
@@ -102,7 +102,7 @@ def _resolve_config(core: Core, strategy_id: int | None, config: StrategyConfig 
         return config
     if strategy_id is not None:
         detail = core.storage.get_strategy(strategy_id)
-        return StrategyConfig.model_validate(detail["current"])
+        return StrategyConfig.parse_obj(detail["current"])
     raise ApiError(400, "bad_request", "strategy_id 与 config 必须提供其一")
 
 
@@ -178,7 +178,7 @@ def register_routes(app: FastAPI, core: Core) -> None:
 
     @app.post("/api/strategies")
     def create_strategy(body: StrategyCreate):
-        return core.storage.create_strategy(body.config.model_dump())
+        return core.storage.create_strategy(body.config.dict())
 
     @app.get("/api/strategies/{sid}")
     def get_strategy(sid: int):
@@ -190,7 +190,7 @@ def register_routes(app: FastAPI, core: Core) -> None:
     @app.put("/api/strategies/{sid}")
     def update_strategy(sid: int, body: StrategyCreate):
         try:
-            return core.storage.update_strategy(sid, body.config.model_dump())
+            return core.storage.update_strategy(sid, body.config.dict())
         except KeyError as e:
             raise ApiError(404, "not_found", f"策略 {sid} 不存在") from e
 
@@ -220,7 +220,7 @@ def register_routes(app: FastAPI, core: Core) -> None:
     def start_screen(body: ScreenRequest):
         cfg = _resolve_config(core, body.strategy_id, body.config)
         if body.universe:
-            cfg = cfg.model_copy(update={"universe": type(cfg.universe).model_validate(body.universe)})
+            cfg = cfg.copy(update={"universe": type(cfg.universe).parse_obj(body.universe)})
 
         def run_screen(progress_cb):
             return screen(cfg, core.data, as_of=body.as_of, progress_cb=progress_cb)

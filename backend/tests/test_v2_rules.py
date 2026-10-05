@@ -66,7 +66,7 @@ def rules_cfg(rules, indicators=None, risk=None):
 
 
 def run_v2(rules, closes, **kw):
-    cfg = StrategyConfig.model_validate(rules_cfg(rules, **kw))
+    cfg = StrategyConfig.parse_obj(rules_cfg(rules, **kw))
     data = FakeData({"600001.SH": bars_from_closes(closes)})
     return backtest(cfg, params(), data)
 
@@ -75,7 +75,7 @@ def run_v2(rules, closes, **kw):
 
 
 def test_rules_valid():
-    cfg = StrategyConfig.model_validate(rules_cfg([
+    cfg = StrategyConfig.parse_obj(rules_cfg([
         {"when": {"logic": "all", "conditions": [{"left": "close", "op": ">", "right": "ma5"}]},
          "action": "buy", "size_pct": 33.33, "max_times": None, "note": "上穿买入"},
         {"when": {"logic": "all", "conditions": [{"left": "pnl_pct", "op": "<=", "right": -5}]},
@@ -88,7 +88,7 @@ def test_rules_valid():
 
 def test_rules_invalid_action():
     with pytest.raises(Exception):
-        StrategyConfig.model_validate(rules_cfg([
+        StrategyConfig.parse_obj(rules_cfg([
             {"when": {"logic": "all", "conditions": [{"left": "close", "op": ">", "right": 0}]},
              "action": "short", "size_pct": 100},
         ]))
@@ -96,7 +96,7 @@ def test_rules_invalid_action():
 
 def test_rules_invalid_size_pct():
     with pytest.raises(Exception):
-        StrategyConfig.model_validate(rules_cfg([
+        StrategyConfig.parse_obj(rules_cfg([
             {"when": {"logic": "all", "conditions": [{"left": "close", "op": ">", "right": 0}]},
              "action": "buy", "size_pct": 150},
         ]))
@@ -104,12 +104,12 @@ def test_rules_invalid_size_pct():
 
 def test_rules_empty_rejected():
     with pytest.raises(Exception):
-        StrategyConfig.model_validate(rules_cfg([]))
+        StrategyConfig.parse_obj(rules_cfg([]))
 
 
 def test_position_state_fields_available():
     """持仓状态字段（pnl_pct/hold_days/dd_from_peak/cost）可在 when 中引用。"""
-    cfg = StrategyConfig.model_validate(rules_cfg([
+    cfg = StrategyConfig.parse_obj(rules_cfg([
         {"when": {"logic": "all", "conditions": [{"left": "pnl_pct", "op": "<=", "right": -5}]},
          "action": "buy", "size_pct": 33.33, "max_times": 1},
     ]))
@@ -122,7 +122,7 @@ def test_position_state_fields_available():
 def test_v1_entry_exit_auto_converted_to_rules():
     """v1 配置（entry/exit）加载后自动转成 rules。"""
     from backend.schema import REFERENCE_STRATEGY
-    cfg = StrategyConfig.model_validate(copy.deepcopy(REFERENCE_STRATEGY))
+    cfg = StrategyConfig.parse_obj(copy.deepcopy(REFERENCE_STRATEGY))
     assert hasattr(cfg, "rules") and len(cfg.rules) >= 2
     assert cfg.rules[0].action == "buy"
     assert cfg.rules[-1].action == "sell"
@@ -226,7 +226,7 @@ _PRE = [10.0] * 10  # 无信号前缀（凑足 40 根 K 线 + 拉开信号与回
 
 
 def run_trail(closes, opens, lows=None, highs=None):
-    cfg = StrategyConfig.model_validate(rules_cfg([BUY_RULE], risk=TRAIL_RISK))
+    cfg = StrategyConfig.parse_obj(rules_cfg([BUY_RULE], risk=TRAIL_RISK))
     bars = bars_from_closes(_PRE + closes, opens=_PRE + opens,
                             lows=_PRE + lows if lows else None, highs=_PRE + highs if highs else None)
     data = FakeData({"600001.SH": bars})
@@ -281,10 +281,10 @@ def test_trailing_stop_no_future_peek():
 
 def test_trailing_stop_schema_range():
     """trailing_stop_pct 范围校验：[0.5, 50]，None=禁用。"""
-    cfg = StrategyConfig.model_validate(rules_cfg([BUY_RULE], risk=TRAIL_RISK))
+    cfg = StrategyConfig.parse_obj(rules_cfg([BUY_RULE], risk=TRAIL_RISK))
     assert cfg.risk.trailing_stop_pct == 8
     with pytest.raises(Exception):
-        StrategyConfig.model_validate(rules_cfg([BUY_RULE], risk={**TRAIL_RISK, "trailing_stop_pct": 0.3}))
+        StrategyConfig.parse_obj(rules_cfg([BUY_RULE], risk={**TRAIL_RISK, "trailing_stop_pct": 0.3}))
 
 
 # ---------- 阶段3：分批止盈阶梯（rules 表达法回归） ----------
@@ -294,7 +294,7 @@ def test_scale_out_ladder():
     """分批止盈阶梯：涨10%卖1/3 + 涨20%清仓 → 两笔卖出，max_times 防止第一档重复触发。"""
     closes = _PRE + [10.5, 11.0, 11.6, 12.8, 12.8]
     opens = _PRE + [10.5, 10.5, 11.5, 11.6, 12.8]
-    cfg = StrategyConfig.model_validate(rules_cfg([
+    cfg = StrategyConfig.parse_obj(rules_cfg([
         {"when": {"logic": "all", "conditions": [{"left": "close", "op": ">", "right": "ma5"}]},
          "action": "buy", "size_pct": 100, "max_times": 1, "note": "上穿买入"},
         {"when": {"logic": "all", "conditions": [{"left": "pnl_pct", "op": ">=", "right": 10}]},

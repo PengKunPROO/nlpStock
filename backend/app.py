@@ -22,8 +22,13 @@ VERSION = "1.0.0"
 log = get_logger("app")
 
 
-def create_app(db_path: str | Path = "data/app.db", static_dir: str | Path | None = None, core=None) -> FastAPI:
-    setup_logging()
+def create_app(
+    db_path: str | Path = "data/app.db",
+    static_dir: str | Path | None = None,
+    log_dir: str | Path | None = None,
+    core=None,
+) -> FastAPI:
+    setup_logging(log_dir=str(log_dir) if log_dir else "data/logs")
     app = FastAPI(title="NLP策略选股器", version=VERSION)
     app.add_middleware(
         CORSMiddleware,
@@ -69,7 +74,35 @@ def create_app(db_path: str | Path = "data/app.db", static_dir: str | Path | Non
     return app
 
 
-app = create_app()
+def build_server(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    db_path: str | Path = "data/app.db",
+    static_dir: str | Path | None = None,
+    log_dir: str | Path | None = None,
+) -> "uvicorn.Server":
+    """构建可编程启动的服务实例（供 Android/Chaquopy 等嵌入环境在后台线程运行）。
+
+    用法::
+
+        server = build_server(port=8000, db_path="<app私有目录>/app.db",
+                              static_dir="<assets里的frontend>", log_dir="<app私有目录>/logs")
+        threading.Thread(target=server.run, daemon=True).start()
+        # 轮询 server.started 为 True 后再加载前端
+        # 退出时设置 server.should_exit = True
+    """
+    import uvicorn
+
+    app = create_app(db_path=db_path, static_dir=static_dir, log_dir=log_dir)
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    # 非主线程无法安装信号处理器（"signal only works in main thread"），嵌入环境必须禁用
+    server.install_signal_handlers = lambda: None  # type: ignore[method-assign]
+    return server
+
+
+# 注：不提供模块级 `app = create_app()`——嵌入环境（Android/Chaquopy）import 本模块时
+# 不应在 cwd 产生 data/ 副作用；命令行入口走 main()，嵌入环境走 build_server()。
 
 
 def main() -> None:

@@ -101,7 +101,7 @@ def backtest(
     trail_pct = cfg.risk.trailing_stop_pct
     max_hold = cfg.risk.max_hold_days
 
-    universe = params.get("universe") or cfg.universe.model_dump()
+    universe = params.get("universe") or cfg.universe.dict()
     codes, names, label = data.resolve_universe(universe)
 
     # 规则分类：开仓（buy 且不引用持仓状态）→ 预计算；持仓期（sell 或引用持仓状态）→ 实时评估

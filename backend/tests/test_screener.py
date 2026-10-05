@@ -9,7 +9,7 @@ from backend.schema import REFERENCE_STRATEGY, StrategyConfig
 
 def simple_cfg():
     """Simple crossover strategy: close > ma20 and vr >= 1.2 today."""
-    return StrategyConfig.model_validate({
+    return StrategyConfig.parse_obj({
         "name": "站上20日线且放量",
         "description": "",
         "source_text": "",
@@ -117,8 +117,8 @@ def test_screen_as_of_slices_history():
 
 
 def test_screen_reference_strategy_runs():
-    cfg = StrategyConfig.model_validate(copy.deepcopy(REFERENCE_STRATEGY))
-    cfg = cfg.model_copy(update={"universe": type(cfg.universe).model_validate({"type": "custom", "codes": ["600001.SH"]})})
+    cfg = StrategyConfig.parse_obj(copy.deepcopy(REFERENCE_STRATEGY))
+    cfg = cfg.copy(update={"universe": type(cfg.universe).parse_obj({"type": "custom", "codes": ["600001.SH"]})})
     # Build synthetic bars that could satisfy: decline, convergence, volume surge, recovery
     bars = []
     price = 100.0

@@ -161,7 +161,7 @@ def test_eval_group_verbose_leaf_values():
     from backend.conditions import eval_group_verbose
 
     series = {"dif": [-1.0, -0.5, -0.2, 0.1], "dea": [0.0, 0.0, 0.0, 0.0]}
-    group = ConditionGroup.model_validate({"logic": "all", "conditions": [
+    group = ConditionGroup.parse_obj({"logic": "all", "conditions": [
         {"left": "dif", "op": ">", "right": "dea", "note": "金叉"},
         {"left": "dif", "op": "<", "right": 0, "note": "水下"},
     ]})
@@ -181,7 +181,7 @@ def test_eval_group_verbose_nested_and_lag():
     from backend.conditions import eval_group_verbose
 
     series = {"dif": [-1.0, -0.5, -0.2, 0.1], "dea": [0.0, -0.3, -0.1, -0.05]}
-    group = ConditionGroup.model_validate({"logic": "all", "conditions": [
+    group = ConditionGroup.parse_obj({"logic": "all", "conditions": [
         {"logic": "all", "conditions": [
             {"left": "dif", "op": ">", "right": "dea"},
             {"left": "dif", "op": "<=", "right": "dea", "lag": 1, "right_lag": 1},
@@ -198,7 +198,7 @@ def test_eval_group_verbose_within_and_none():
     from backend.conditions import eval_group_verbose
 
     series = {"close": [5, 20, 5, 5], "thr": [10, 10, 10, 10]}
-    group = ConditionGroup.model_validate({"logic": "all", "conditions": [
+    group = ConditionGroup.parse_obj({"logic": "all", "conditions": [
         {"left": "close", "op": ">", "right": "thr", "within": 3},
     ]})
     out = eval_group_verbose(group, series, 3)
@@ -208,7 +208,7 @@ def test_eval_group_verbose_within_and_none():
     assert "within" in c["expr"] or c.get("within")
     # None 值：left 为 None → passed False，left 为 None
     series2 = {"close": [None, 5], "thr": [10, 10]}
-    g2 = ConditionGroup.model_validate({"logic": "all", "conditions": [
+    g2 = ConditionGroup.parse_obj({"logic": "all", "conditions": [
         {"left": "close", "op": ">", "right": "thr"},
     ]})
     out2 = eval_group_verbose(g2, series2, 0)
@@ -222,13 +222,13 @@ def test_full_reference_strategy_pipeline_on_synthetic_bars():
 
     from backend.schema import REFERENCE_STRATEGY, StrategyConfig
 
-    cfg = StrategyConfig.model_validate(copy.deepcopy(REFERENCE_STRATEGY))
-    specs = [IndicatorSpec.model_validate(i) for i in cfg.model_dump()["indicators"]]
+    cfg = StrategyConfig.parse_obj(copy.deepcopy(REFERENCE_STRATEGY))
+    specs = [IndicatorSpec.parse_obj(i) for i in cfg.dict()["indicators"]]
     bars = make_bars([(10 + i * 0.1, 11 + i * 0.1, 9.9 + i * 0.1, 10.5 + i * 0.1, 100 + i * 37) for i in range(120)])
     bars += make_bars([(20 - i * 0.2, 20.5 - i * 0.2, 18 - i * 0.2, 19 - i * 0.2, 90 + i * 5) for i in range(30)])
     series = compute_indicators(bars, specs)
-    entry = ConditionGroup.model_validate(cfg.model_dump()["entry"])
-    exit_ = ConditionGroup.model_validate(cfg.model_dump()["exit"])
+    entry = ConditionGroup.parse_obj(cfg.dict()["entry"])
+    exit_ = ConditionGroup.parse_obj(cfg.dict()["exit"])
     for i in range(0, len(bars), 7):
         signal_at(entry, series, i)
         signal_at(exit_, series, i)
@@ -368,7 +368,7 @@ def test_macd_golden_cross_condition_evaluates():
         "dif": [-1.0, -0.5, -0.2, 0.1, 0.3, 0.5],
         "dea": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     }
-    cross = ConditionGroup.model_validate({"logic": "all", "conditions": [
+    cross = ConditionGroup.parse_obj({"logic": "all", "conditions": [
         {"left": "dif", "op": ">", "right": "dea"},
         {"left": "dif", "op": "<=", "right": "dea", "lag": 1, "right_lag": 1},
     ]})

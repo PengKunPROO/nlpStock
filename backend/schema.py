@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Literal, Union
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, conlist, root_validator, validator
 
 BASE_FIELDS = {"open", "high", "low", "close", "volume"}
 HOLD_FIELDS = {"cost", "pnl_pct", "hold_days", "dd_from_peak"}  # 持仓状态字段（内置，无需声明）
@@ -37,58 +37,77 @@ class IndicatorSpec(BaseModel):
     m2: Union[int, None] = None
     k: Union[float, None] = None
 
-    @field_validator("id")
+    @validator("id")
     @classmethod
     def _check_id(cls, v: str) -> str:
         if not _ID_RE.match(v):
             raise ValueError("indicator id must be lowercase snake_case (max 20 chars)")
         return v
 
-    def _check_int_range(self, names: tuple[str, ...]) -> None:
+    @classmethod
+    def _check_int_range_values(cls, values, names):
         for name in names:
-            v = getattr(self, name)
+            v = values.get(name)
             if v is not None and not (2 <= v <= 250):
                 raise ValueError(f"{name} must be in [2, 250]")
 
-    def _check_of_optional(self) -> None:
-        if self.of is not None and self.of not in BASE_FIELDS and not _ID_RE.match(self.of):
+    @classmethod
+    def _check_of_optional_values(cls, values):
+        of = values.get("of")
+        if of is not None and of not in BASE_FIELDS and not _ID_RE.match(of):
             raise ValueError(f"of must be a base field or a declared indicator id")
 
-    @model_validator(mode="after")
-    def _check_params(self) -> "IndicatorSpec":
-        if self.kind in ("MA", "PCT_CHANGE"):
-            if self.of not in BASE_FIELDS and not _ID_RE.match(self.of or ""):
-                raise ValueError(f"{self.kind} requires of in base fields or a declared indicator id")
-            if self.n is None or not (2 <= self.n <= 250):
-                raise ValueError(f"{self.kind} requires n in [2, 250]")
-        elif self.kind == "VRATIO":
-            if self.n is None or not (2 <= self.n <= 250):
+    @root_validator(skip_on_failure=True)
+    def _check_params(cls, values):  # noqa: N805
+        kind = values.get("kind")
+        if kind in ("MA", "PCT_CHANGE"):
+            of = values.get("of")
+            if of not in BASE_FIELDS and not _ID_RE.match(of or ""):
+                raise ValueError(f"{kind} requires of in base fields or a declared indicator id")
+            n = values.get("n")
+            if n is None or not (2 <= n <= 250):
+                raise ValueError(f"{kind} requires n in [2, 250]")
+        elif kind == "VRATIO":
+            n = values.get("n")
+            if n is None or not (2 <= n <= 250):
                 raise ValueError("VRATIO requires n in [2, 250]")
-        elif self.kind == "BOX_TOP":
-            if self.n is None or not (2 <= self.n <= 250):
+        elif kind == "BOX_TOP":
+            n = values.get("n")
+            if n is None or not (2 <= n <= 250):
                 raise ValueError("BOX_TOP requires n in [2, 250]")
-        elif self.kind == "MA_CONVERGE":
-            if not self.mas or len(self.mas) < 2:
+        elif kind == "MA_CONVERGE":
+            mas = values.get("mas")
+            if not mas or len(mas) < 2:
                 raise ValueError("MA_CONVERGE requires mas with >= 2 entries")
-        elif self.kind == "EMA":
-            if self.of not in BASE_FIELDS and not _ID_RE.match(self.of or ""):
+        elif kind == "EMA":
+            of = values.get("of")
+            if of not in BASE_FIELDS and not _ID_RE.match(of or ""):
                 raise ValueError(f"EMA requires of in base fields or a declared indicator id")
-            if self.n is None or not (2 <= self.n <= 250):
+            n = values.get("n")
+            if n is None or not (2 <= n <= 250):
                 raise ValueError("EMA requires n in [2, 250]")
-        elif self.kind in ("MACD_DIF", "MACD_DEA", "MACD_HIST"):
-            self._check_of_optional()
-            self._check_int_range(("fast", "slow", "signal"))
-        elif self.kind in ("KDJ_K", "KDJ_D", "KDJ_J"):
-            self._check_int_range(("n", "m1", "m2"))
-        elif self.kind == "RSI":
-            self._check_of_optional()
-            self._check_int_range(("n",))
-        elif self.kind in ("BOLL_UP", "BOLL_MID", "BOLL_LOW"):
-            self._check_of_optional()
-            self._check_int_range(("n",))
-            if self.k is not None and self.k <= 0:
+        elif kind in ("MACD_DIF", "MACD_DEA", "MACD_HIST"):
+            cls._check_of_optional_values(values)
+            cls._check_int_range_values(values, ("fast", "slow", "signal"))
+        elif kind in ("KDJ_K", "KDJ_D", "KDJ_J"):
+            cls._check_int_range_values(values, ("n", "m1", "m2"))
+        elif kind == "RSI":
+            cls._check_of_optional_values(values)
+            cls._check_int_range_values(values, ("n",))
+        elif kind in ("BOLL_UP", "BOLL_MID", "BOLL_LOW"):
+            cls._check_of_optional_values(values)
+            cls._check_int_range_values(values, ("n",))
+            k = values.get("k")
+            if k is not None and k <= 0:
                 raise ValueError("k must be > 0")
-        return self
+        return values
+
+    @classmethod
+    def _check_int_range_values(cls, values, names):
+        for name in names:
+            v = values.get(name)
+            if v is not None and not (2 <= v <= 250):
+                raise ValueError(f"{name} must be in [2, 250]")
 
 
 class LeafCondition(BaseModel):
@@ -101,15 +120,15 @@ class LeafCondition(BaseModel):
     within: Union[int, None] = None
     note: Union[str, None] = None
 
-    @model_validator(mode="after")
-    def _check(self) -> "LeafCondition":
-        if self.lag < 0 or self.right_lag < 0:
+    @root_validator(skip_on_failure=True)
+    def _check(cls, values):  # noqa: N805
+        if values.get("lag", 0) < 0 or values.get("right_lag", 0) < 0:
             raise ValueError("lag/right_lag must be >= 0")
-        if self.within is not None and self.within < 1:
+        if values.get("within") is not None and values["within"] < 1:
             raise ValueError("within must be >= 1")
-        if self.right_factor is not None and self.right_factor <= 0:
+        if values.get("right_factor") is not None and values["right_factor"] <= 0:
             raise ValueError("right_factor must be > 0")
-        return self
+        return values
 
 
 class ConditionGroup(BaseModel):
@@ -127,15 +146,18 @@ class Rule(BaseModel):
     max_times: Union[int, None] = None  # 单只股票最多触发次数；null=不限
     note: str = ""
 
-    @model_validator(mode="after")
-    def _check(self) -> "Rule":
-        if not self.when.conditions:
+    @root_validator(skip_on_failure=True)
+    def _check(cls, values):  # noqa: N805
+        when = values.get("when")
+        if when is None or not when.conditions:
             raise ValueError("rule.when.conditions must not be empty")
-        if self.size_pct is not None and not (0 < self.size_pct <= 100):
+        size_pct = values.get("size_pct")
+        if size_pct is not None and not (0 < size_pct <= 100):
             raise ValueError("size_pct must be in (0, 100]")
-        if self.max_times is not None and self.max_times < 1:
+        max_times = values.get("max_times")
+        if max_times is not None and max_times < 1:
             raise ValueError("max_times must be >= 1")
-        return self
+        return values
 
 
 class Universe(BaseModel):
@@ -143,18 +165,18 @@ class Universe(BaseModel):
     code: Union[str, None] = None
     codes: Union[list[str], None] = None
 
-    @model_validator(mode="after")
-    def _check(self) -> "Universe":
-        if self.type in ("index", "sector"):
-            if not self.code or not _THSCODE_RE.match(self.code):
-                raise ValueError(f"universe type {self.type} requires a valid thscode code")
-        elif self.type == "custom":
-            if not self.codes:
+    @root_validator(skip_on_failure=True)
+    def _check(cls, values):  # noqa: N805
+        if values.get("type") in ("index", "sector"):
+            if not values.get("code") or not _THSCODE_RE.match(values["code"]):
+                raise ValueError(f"universe type {values.get('type')} requires a valid thscode code")
+        elif values.get("type") == "custom":
+            if not values.get("codes"):
                 raise ValueError("universe type custom requires non-empty codes")
-            for c in self.codes:
+            for c in values["codes"]:
                 if not _THSCODE_RE.match(c):
                     raise ValueError(f"invalid thscode: {c}")
-        return self
+        return values
 
 
 class RiskConfig(BaseModel):
@@ -173,7 +195,7 @@ class BacktestDefaults(BaseModel):
     fee_bps: float = Field(ge=0, le=100)
     stamp_tax_bps: float = Field(ge=0, le=100)
 
-    @field_validator("start", "end")
+    @validator("start", "end")
     @classmethod
     def _check_date(cls, v: str) -> str:
         return _valid_date(v)
@@ -203,14 +225,14 @@ class StrategyConfig(BaseModel):
     source_text: str = ""
     parse_engine: str = "llm"
     universe: Universe
-    indicators: list[IndicatorSpec] = Field(min_length=1, max_length=30)
+    indicators: conlist(IndicatorSpec, min_items=1, max_items=30)  # type: ignore[valid-type]
     entry: Union[ConditionGroup, None] = None
     exit: Union[ConditionGroup, None] = None
     rules: Union[list[Rule], None] = None
     risk: RiskConfig = RiskConfig()
     backtest_defaults: BacktestDefaults
 
-    @field_validator("name")
+    @validator("name")
     @classmethod
     def _check_name(cls, v: str) -> str:
         v = v.strip()
@@ -218,27 +240,30 @@ class StrategyConfig(BaseModel):
             raise ValueError("name must be 1-40 chars")
         return v
 
-    @model_validator(mode="after")
-    def _normalize_rules(self) -> "StrategyConfig":
+    @root_validator(skip_on_failure=True)
+    def _normalize_rules(cls, values):  # noqa: N805
         """v1 兼容：entry/exit 自动转为 rules（先执行，供 _check_refs 使用）。"""
-        if not self.rules:
-            if self.entry is None:
+        if not values.get("rules"):
+            entry = values.get("entry")
+            if entry is None:
                 raise ValueError("必须提供 rules 或 entry")
-            rules = [Rule(when=self.entry, action="buy", size_pct=None, note=self.entry.note or "入场信号")]
-            if self.exit is not None and self.exit.conditions:
-                rules.append(Rule(when=self.exit, action="sell", size_pct=100, note=self.exit.note or "离场信号"))
-            object.__setattr__(self, "rules", rules)
-        return self
+            rules = [Rule(when=entry, action="buy", size_pct=None, note=entry.note or "入场信号")]
+            exit_ = values.get("exit")
+            if exit_ is not None and exit_.conditions:
+                rules.append(Rule(when=exit_, action="sell", size_pct=100, note=exit_.note or "离场信号"))
+            values["rules"] = rules
+        return values
 
-    @model_validator(mode="after")
-    def _check_refs(self) -> "StrategyConfig":
-        ids = [ind.id for ind in self.indicators]
+    @root_validator(skip_on_failure=True)
+    def _check_refs(cls, values):  # noqa: N805
+        indicators = values.get("indicators") or []
+        ids = [ind.id for ind in indicators]
         if len(ids) != len(set(ids)):
             raise ValueError("indicator ids must be unique")
         known = set(ids) | BASE_FIELDS | HOLD_FIELDS
 
-        graph: dict[str, list[str]] = {ind.id: [] for ind in self.indicators}
-        for ind in self.indicators:
+        graph: dict[str, list[str]] = {ind.id: [] for ind in indicators}
+        for ind in indicators:
             refs: list[str] = []
             if ind.of and ind.of not in BASE_FIELDS:
                 if ind.of not in known:
@@ -265,9 +290,9 @@ class StrategyConfig(BaseModel):
                     if isinstance(c.right, str) and c.right not in known:
                         raise ValueError(f"condition references unknown indicator/field: {c.right}")
 
-        for rule in self.rules or []:
+        for rule in values.get("rules") or []:
             walk(rule.when.conditions, 1)
-        return self
+        return values
 
 
 REFERENCE_STRATEGY: dict = {
