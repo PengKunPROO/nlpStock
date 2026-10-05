@@ -171,6 +171,7 @@ function renderResults(el, result, isCached = false) {
       card.onclick = (ev) => {
         if (ev.target.tagName === 'INPUT') return; // 勾选不跳转
         state.chartCode = card.dataset.code;
+        state.chartSignalDate = m.signal_date || null; // 带上信号日，图表页标注信号点
         location.hash = '#/chart';
       };
       card.querySelector('input[data-pick]').onchange = () => {

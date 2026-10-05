@@ -116,28 +116,36 @@ export function renderKline(canvas, bars, opts = {}) {
       ctx.stroke();
     }
 
-    // trade markers（买卖点三角标：buy=下方红▲ / sell=上方绿▼）
+    // trade markers（买卖点三角标：buy=下方红▲ / sell=上方绿▼ / signal=信号点圆圈）
     markerPts.length = 0;
     for (const m of markers) {
       const x = padL + m.idx * step + step / 2;
       const py = yMain(m.price ?? bars[m.idx]?.close);
       let y = py + (m.type === 'buy' ? MARK_OFF : -MARK_OFF);
+      if (m.type === 'signal') y = py + MARK_OFF;  // 信号点：价格下方圆圈
       // 价格超出可视区间时贴边显示，保证标注始终可见（真实成交价恒在图内，不会触发）
       if (y < padT + 2) y = padT + 2;
       else if (y > bodyBottom - 2) y = bodyBottom - 2;
-      ctx.fillStyle = m.type === 'buy' ? UP : DOWN;
-      ctx.beginPath();
-      if (m.type === 'buy') {
-        ctx.moveTo(x, y - MARK_SIZE / 2);
-        ctx.lineTo(x - MARK_SIZE / 2, y + MARK_SIZE / 2);
-        ctx.lineTo(x + MARK_SIZE / 2, y + MARK_SIZE / 2);
+      if (m.type === 'signal') {
+        ctx.fillStyle = '#FF9500';  // 橙色圆圈，区别于红▲绿▼
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fill();
       } else {
-        ctx.moveTo(x, y + MARK_SIZE / 2);
-        ctx.lineTo(x - MARK_SIZE / 2, y - MARK_SIZE / 2);
-        ctx.lineTo(x + MARK_SIZE / 2, y - MARK_SIZE / 2);
+        ctx.fillStyle = m.type === 'buy' ? UP : DOWN;
+        ctx.beginPath();
+        if (m.type === 'buy') {
+          ctx.moveTo(x, y - MARK_SIZE / 2);
+          ctx.lineTo(x - MARK_SIZE / 2, y + MARK_SIZE / 2);
+          ctx.lineTo(x + MARK_SIZE / 2, y + MARK_SIZE / 2);
+        } else {
+          ctx.moveTo(x, y + MARK_SIZE / 2);
+          ctx.lineTo(x - MARK_SIZE / 2, y - MARK_SIZE / 2);
+          ctx.lineTo(x + MARK_SIZE / 2, y - MARK_SIZE / 2);
+        }
+        ctx.closePath();
+        ctx.fill();
       }
-      ctx.closePath();
-      ctx.fill();
       markerPts.push({ m, x, y });
     }
 

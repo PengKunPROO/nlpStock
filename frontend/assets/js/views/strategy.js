@@ -202,6 +202,7 @@ function renderReview(view) {
   let jsonMode = false;
   view.innerHTML = `
     <div class="seg" id="type-seg"></div>
+    <div class="card" style="padding:10px 16px"><span class="link" style="font-size:14px" id="review-back">‹ 返回列表（放弃本次编辑）</span></div>
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <span class="chip accent">审查 · ${tLabel} · ${cfg.parse_engine === 'llm' ? 'AI 生成' : '草稿'}</span>
@@ -215,6 +216,7 @@ function renderReview(view) {
     <button class="btn" id="save-draft" style="margin-top:4px">保存策略</button>
   `;
   renderTypeSeg(view);
+  document.getElementById('review-back').onclick = () => { state.draftConfig = null; go('list'); };
 
   const body = document.getElementById('review-body');
   const renderBody = () => {
@@ -622,13 +624,17 @@ async function renderDetail(view, sid) {
     ? `<span class="chip">规则 ${(cfg.rules || []).length} 条</span>`
     : `<span class="chip">${esc(cfg.universe?.type === 'all' ? '全市场' : cfg.universe?.code || '自选')}</span><span class="chip">入场 ${countConds(cfg.entry)} 条</span>`;
   view.innerHTML = `
+    <div class="seg" id="type-seg"></div>
     <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <span class="link" style="font-size:14px" id="d-back">‹ 返回列表</span>
+        <span class="chip accent">v${detail.version}</span>
+      </div>
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
         <div>
           <div style="font-size:18px;font-weight:800">${esc(cfg.name)}</div>
           <div class="muted" style="font-size:13px;margin-top:3px">${esc(cfg.description || '')}</div>
         </div>
-        <span class="chip accent">v${detail.version}</span>
       </div>
       <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
         <span class="chip">${isTrading ? '交易' : '选股'}</span>
@@ -645,6 +651,7 @@ async function renderDetail(view, sid) {
     <div class="section-title">当前配置 JSON</div>
     <div class="card"><code class="json-box">${esc(JSON.stringify(cfg, null, 2))}</code></div>
   `;
+  document.getElementById('d-back').onclick = () => go('list');
   document.getElementById('d-edit').onclick = () => {
     state.draftConfig = JSON.parse(JSON.stringify(cfg));
     view.dataset.stratType = isTrading ? 'trading' : 'screening';

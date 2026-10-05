@@ -10,6 +10,7 @@ const PERIODS = [
 const maVisible = { ma5: true, ma10: true, ma20: true, ma60: true };
 let cleanupFn = null;
 let selectedIdx = null; // 当前浮层对应的 K 线索引（null = 浮层关闭）
+let klineCount = 120; // 当前加载的 K 线根数（加载更早/滑动时递增）
 
 export async function renderChartView(view) {
   const code = state.chartCode || '600519.SH';
@@ -26,11 +27,17 @@ export async function renderChartView(view) {
       <canvas id="kline-canvas" class="kline" style="height:440px"></canvas>
       <div id="kline-tip" class="kline-tip" style="display:none"></div>
     </div>
-    <div class="hint">点击 / 触摸 K 线查看当日开高低收、量比与量能状态。量比 = 当期成交量 ÷ 前5期均量。</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:2px 4px 0">
+      <span class="link" id="load-earlier" style="font-size:13px">‹ 加载更早</span>
+      <span class="muted" style="font-size:12px">左右滑动亦可切换时间窗口</span>
+    </div>
+    <div class="hint">点击 / 触摸 K 线查看当日开高低收；点「更多」展开量能等详情。左右滑动（或点「加载更早」）查看更早历史。</div>
   `;
   bindSearch(view);
   renderPeriodSeg();
   renderLegend();
+  document.getElementById('load-earlier').onclick = () => { klineCount += 120; loadChart(code, view.dataset.period || '1d', true); };
+  bindSwipe(view, code);
   await loadChart(code, view.dataset.period || '1d');
 }
 
@@ -43,6 +50,7 @@ function renderPeriodSeg() {
     b.onclick = () => {
       document.getElementById('view').dataset.period = p.v;
       renderPeriodSeg();
+      klineCount = 120; // 切换周期重置窗口
       loadChart(state.chartCode || '600519.SH', p.v);
     };
     seg.appendChild(b);
@@ -96,14 +104,39 @@ function bindSearch(view) {
   });
 }
 
-async function loadChart(code, period, silent = false) {
+// 水平滑动：左滑加载更早历史，右滑回到更近
+function bindSwipe(view, code) {
+  const canvas = document.getElementById('kline-canvas');
+  if (!canvas) return;
+  let sx = null, sy = null, dragging = false;
+  canvas.addEventListener('pointerdown', (e) => { sx = e.clientX; sy = e.clientY; dragging = true; });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!dragging || sx === null) return;
+    if (Math.abs(e.clientX - sx) > 30 && Math.abs(e.clientY - sy) < 40) {
+      // 水平滑动意图，阻止页面滚动
+      e.preventDefault();
+    }
+  });
+  canvas.addEventListener('pointerup', (e) => {
+    if (!dragging || sx === null) return;
+    const dx = e.clientX - sx;
+    const dy = e.clientY - sy;
+    dragging = false; sx = null; sy = null;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return; // 太小或偏垂直 → 视为点击
+    if (dx < 0) { klineCount += 120; loadChart(code, view.dataset.period || '1d', true); } // 左滑更早
+    else { klineCount = Math.max(120, klineCount - 120); loadChart(code, view.dataset.period || '1d', true); } // 右滑更近
+  });
+}
+
+async function loadChart
+(code, period, silent = false) {
   const head = document.getElementById('chart-head');
   const canvas = document.getElementById('kline-canvas');
   const tip = document.getElementById('kline-tip');
   if (!head || !canvas) return;
   if (!silent) head.innerHTML = '<div class="skeleton" style="height:52px"></div>';
   try {
-    const count = period === '1d' ? 120 : 60;
+    const count = klineCount;
     const data = await api.kline(code, period, count);
     state.chartCode = code;
     document.title = `${data.name} · 策略选股`;
@@ -127,8 +160,15 @@ async function loadChart(code, period, silent = false) {
     if (cleanupFn) cleanupFn();
     hideTip();
     selectedIdx = null;
+    // 信号点标注：从选股结果点击带来的 signal_date
+    const markers = [];
+    if (state.chartSignalDate) {
+      const si = data.bars.findIndex((b) => b.date === state.chartSignalDate);
+      if (si !== -1) markers.push({ idx: si, type: 'signal', price: data.bars[si].close, detail: { date: state.chartSignalDate, close: data.bars[si].close } });
+    }
     cleanupFn = renderKline(canvas, data.bars, {
       ...maVisible,
+      markers,
       onBarTap: (bar, idx, pos, width) => {
         if (idx === selectedIdx) {
           // 再次点击同一根 K 线：切换关闭浮层
@@ -138,6 +178,13 @@ async function loadChart(code, period, silent = false) {
         }
         selectedIdx = idx;
         showTip(tip, bar, pos, width);
+      },
+      onMarkerTap: (m, pos, width) => {
+        // 信号点点击：显示信号日
+        const d = m.detail || {};
+        tip.innerHTML = `<div style="font-weight:700;margin-bottom:2px"><span class="chip accent" style="font-size:11px">选股信号</span> ${esc(d.date)}</div>
+          <div class="t-row"><span>收盘</span><span class="mono">${fmtPrice(d.close ?? m.price)}</span></div>`;
+        placeTip(tip, pos, width);
       },
       onBlankTap: () => {
         // 点击 K 线 canvas 的空白区域（图身之外）
@@ -152,6 +199,13 @@ async function loadChart(code, period, silent = false) {
   }
 }
 
+function placeTip(tip, pos, width) {
+  const flip = pos.x > width - 190;
+  tip.style.left = flip ? 'auto' : `${Math.max(4, pos.x + 14)}px`;
+  tip.style.right = flip ? `${Math.max(4, width - pos.x + 14)}px` : 'auto';
+  tip.style.display = 'block';
+}
+
 function showTip(tip, bar, pos, width) {
   const vs = VOL_STATE[bar.vol_state] || { label: '—', cls: 'chip' };
   const chg = bar.open ? (bar.close / bar.open - 1) * 100 : null;
@@ -161,21 +215,29 @@ function showTip(tip, bar, pos, width) {
     .join(' · ');
   tip.innerHTML = `
     <div style="font-weight:700;margin-bottom:2px">${esc(bar.date)}</div>
-    <div class="t-row"><span>开盘</span><span class="mono ${pctClass(bar.close - bar.open)}">${fmtPrice(bar.open)}</span></div>
-    <div class="t-row"><span>最高</span><span class="mono up">${fmtPrice(bar.high)}</span></div>
-    <div class="t-row"><span>最低</span><span class="mono down">${fmtPrice(bar.low)}</span></div>
-    <div class="t-row"><span>收盘</span><span class="mono ${pctClass(bar.close - bar.open)}">${fmtPrice(bar.close)}</span></div>
+    <div class="t-row"><span>开</span><span class="mono ${pctClass(bar.close - bar.open)}">${fmtPrice(bar.open)}</span></div>
+    <div class="t-row"><span>高</span><span class="mono up">${fmtPrice(bar.high)}</span></div>
+    <div class="t-row"><span>低</span><span class="mono down">${fmtPrice(bar.low)}</span></div>
+    <div class="t-row"><span>收</span><span class="mono ${pctClass(bar.close - bar.open)}">${fmtPrice(bar.close)}</span></div>
     <div class="t-row"><span>涨跌</span><span class="mono ${pctClass(chg)}">${fmtPct(chg)}</span></div>
-    <div class="t-row"><span>成交量</span><span class="mono">${fmtVolume(bar.volume)}</span></div>
-    <div class="t-row"><span>成交额</span><span class="mono">${fmtTurnover(bar.turnover)}</span></div>
-    <div class="t-row"><span>量比</span><span class="mono">${bar.vratio === null || bar.vratio === undefined ? '—' : bar.vratio.toFixed(2)}</span></div>
-    <div class="t-row"><span>量能</span><span><span class="${vs.cls}">${vs.label}</span></span></div>
-    ${mas ? `<div style="margin-top:4px;color:var(--text-3)">${mas}</div>` : ''}
+    <div id="tip-extra" style="display:none;margin-top:4px">
+      <div class="t-row"><span>成交量</span><span class="mono">${fmtVolume(bar.volume)}</span></div>
+      <div class="t-row"><span>成交额</span><span class="mono">${fmtTurnover(bar.turnover)}</span></div>
+      <div class="t-row"><span>量比</span><span class="mono">${bar.vratio === null || bar.vratio === undefined ? '—' : bar.vratio.toFixed(2)}</span></div>
+      <div class="t-row"><span>量能</span><span><span class="${vs.cls}">${vs.label}</span></span></div>
+      ${mas ? `<div style="margin-top:4px;color:var(--text-3)">${mas}</div>` : ''}
+    </div>
+    <div id="tip-more" class="link" style="font-size:12px;margin-top:4px">更多 ▾</div>
   `;
-  tip.style.display = 'block';
-  const flip = pos.x > width - 190;
-  tip.style.left = flip ? 'auto' : `${Math.max(4, pos.x + 14)}px`;
-  tip.style.right = flip ? `${Math.max(4, width - pos.x + 14)}px` : 'auto';
+  placeTip(tip, pos, width);
+  const more = tip.querySelector('#tip-more');
+  const extraEl = tip.querySelector('#tip-extra');
+  more.onclick = (e) => {
+    e.stopPropagation();
+    const shown = extraEl.style.display !== 'none';
+    extraEl.style.display = shown ? 'none' : '';
+    more.textContent = shown ? '更多 ▾' : '收起 ▴';
+  };
 }
 
 function hideTip() {
