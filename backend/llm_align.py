@@ -1,4 +1,4 @@
-"""DeepSeek multi-turn strategy alignment: NL text → clarify questions → validated StrategyConfig."""
+"""DeepSeek multi-turn strategy alignment: NL text → clarify questions → validated ScreeningStrategy/TradingStrategy."""
 from __future__ import annotations
 
 import json
@@ -11,7 +11,7 @@ import httpx
 from pydantic import ValidationError
 
 from .logging_setup import get_logger
-from .schema import REFERENCE_STRATEGY, StrategyConfig
+from .schema import ScreeningStrategy, TradingStrategy
 
 log = get_logger("llm")
 
@@ -63,7 +63,7 @@ of 字段除基础字段(open/high/low/close/volume)外，还可引用**先声�
 - dd_from_peak 距持仓期最高收盘价回撤%（≤0，常为负）
 - cost 加权成本价"""
 
-_CONDITION_MODEL = """条件模型（entry/exit 的 conditions 数组元素）：
+_CONDITION_MODEL = """条件模型（entry 或 rules[].when 的 conditions 数组元素）：
 叶子条件：{"left":"close","op":">","right":"ma20","right_factor":0.98,"lag":0,"right_lag":0,"within":15,"note":"原文依据"}
 - left/right：基础字段(open/high/low/close/volume)或已声明指标id；right 也可以是数字常量
 - op：> >= < <= ==
@@ -72,72 +72,142 @@ _CONDITION_MODEL = """条件模型（entry/exit 的 conditions 数组元素）�
 - within：可选回看窗口，最近within个交易日内任一天成立即成立（表达"阴跌之后等急跌"这类分阶段时序）
 - note：必须写，标注对应的用户原话或量化理由，供用户审查
 分组条件（最多一层嵌套）：{"logic":"all"|"any","conditions":[叶子或分组],"note":"..."}
-entry.logic/exit.logic：all=全部满足，any=任一满足（离场通常用any）。"""
+entry.logic / rules[].when.logic：all=全部满足，any=任一满足（卖出条件通常用any）。"""
 
-_RULES_MODEL = """策略规则模型（v2，config 的 rules 数组；取代 entry/exit，每条 = 触发条件 → 买卖动作 + 仓位）：
+_RULES_MODEL = """策略规则模型（config 的 rules 数组，每条 = 触发条件 → 买卖动作 + 仓位）：
 {"when":{条件组},"action":"buy"|"sell","size_pct":33.33,"max_times":1,"note":"原文依据"}
-- action=buy：size_pct = 占**当前总权益**的%（如 33.33 = 买 1/3 仓）；null = 用全局 position_pct
+- action=buy：仅用于补仓/加仓（入场由选股策略负责），size_pct = 占**当前总权益**的%（如 33.33 = 买 1/3 仓）；null = 用全局 position_pct
 - action=sell：size_pct = 占**当前持仓股数**的%（100 = 清仓，50 = 卖一半）；null = 100
 - max_times：该规则在单只股票的单次持仓内最多触发次数（"跌5%补仓"这类必须设 1，防止反复补仓）；null = 不限；清仓后重置
 - 补仓/加仓 = 一条 action=buy 的规则（when 引用 pnl_pct/hold_days 等持仓字段），不是特殊字段
 - 减仓/分批止盈 = action=sell 且 size_pct<100；阶梯止盈 = 多条 sell 规则各设阈值档
 - 移动止损两种口径："从最高点回落X%离场"若指盘中保护 → risk.trailing_stop_pct（引擎跟踪持仓期盘中最高价，盘中跌破止损价即成交）；若指收盘确认 → sell 规则用 dd_from_peak<=-X（T收盘判定、T+1开盘卖）。用户未明确时默认 trailing_stop_pct 并写入 warnings
-- 风控（止损/止盈/移动止损/最长持仓）仍用 risk 字段，不写成 rules
+- 风控（止损/止盈/移动止损/最长持仓）仍用 risk 字段，不写成 rules"""
 
-示例（用户："MACD死叉买三分之一仓，下跌5%再补仓三分之一，涨10%减半，金叉清仓，止损8%"）：
-{"rules":[
- {"when":{"logic":"all","conditions":[{"logic":"all","conditions":[{"left":"dif","op":"<","right":"dea"},{"left":"dif","op":">=","right":"dea","lag":1,"right_lag":1}]}]},"action":"buy","size_pct":33.33,"max_times":null,"note":"MACD死叉买入1/3仓"},
- {"when":{"logic":"all","conditions":[{"left":"pnl_pct","op":"<=","right":-5}]},"action":"buy","size_pct":33.33,"max_times":1,"note":"下跌5%补仓1/3"},
- {"when":{"logic":"all","conditions":[{"left":"pnl_pct","op":">=","right":10}]},"action":"sell","size_pct":50,"max_times":null,"note":"涨10%减半"},
- {"when":{"logic":"all","conditions":[{"logic":"all","conditions":[{"left":"dif","op":">","right":"dea"},{"left":"dif","op":"<=","right":"dea","lag":1,"right_lag":1}]}]},"action":"sell","size_pct":100,"max_times":null,"note":"MACD金叉清仓"}
-]}
-阶梯分批止盈示例（"涨10%卖1/3，涨20%清仓"）：
-{"rules":[
- {"when":{"logic":"all","conditions":[{"left":"pnl_pct","op":">=","right":10}]},"action":"sell","size_pct":33.33,"max_times":1,"note":"涨10%卖1/3"},
- {"when":{"logic":"all","conditions":[{"left":"pnl_pct","op":">=","right":20}]},"action":"sell","size_pct":100,"note":"涨20%清仓"}
-]}
-（清仓档可不设 max_times：清仓后持仓字段为 None 规则自然失效）
-risk 用 {"stop_loss_pct":8.0,"trailing_stop_pct":null,"max_hold_days":null,"take_profit_pct":null}"""
+_SCREENING_OUTPUT = """config 输出字段（ScreeningStrategy，选股策略——只负责"买什么/何时入场"，不含持仓管理与风控）：
+- name：策略名（1-40字符）
+- description：一句话说明策略思路
+- universe：{"type":"index"|"sector"|"custom"|"all","code":"000300.SH","codes":[...]}（index/sector需code，custom需codes，all=全市场）
+- indicators：1-30个指标（见指标目录），entry 中用到的指标必须先声明
+- entry：入场条件 ConditionGroup（非空）。这是纯选股筛选，不引用持仓状态字段（pnl_pct/hold_days/dd_from_peak/cost）——选股时尚未持仓，引用它们恒不成立
+- 不要输出 rules/risk/backtest_defaults 字段（那些属于交易策略）"""
 
-_PROTOCOL = """输出协议（严格遵守）：
+_TRADING_OUTPUT = """config 输出字段（TradingStrategy，交易策略——只负责"持仓后怎么办"，入场由选股策略负责）：
+- name：策略名（1-40字符）
+- description：一句话说明策略思路
+- indicators：1-30个指标（见指标目录），rules 中用到的指标必须先声明
+- rules：1条以上持仓管理规则（见规则模型）。action=buy 仅用于补仓/加仓，其 when 必须引用持仓状态字段（如 pnl_pct<=-5、hold_days>=3）；action=sell 用于卖出/减仓（引用价格/指标或持仓字段均可）
+- risk：{"stop_loss_pct":8.0,"trailing_stop_pct":null,"max_hold_days":30,"take_profit_pct":null}（null=禁用；trailing_stop_pct=移动止损%，自持仓期最高价回撤盘中触发）
+- backtest_defaults：{"start":"2025-01-01","end":"<今天>","initial_cash":1000000,"position_pct":20,"max_positions":5,"fee_bps":2.5,"stamp_tax_bps":5.0}
+- 不要输出 entry/universe 字段（那些属于选股策略）"""
+
+_SCREENING_PROTOCOL = """输出协议（严格遵守）：
 每次只输出一个 JSON 对象，两种形态二选一：
 
 1. 需要继续对齐：
 {"type":"clarify","understanding":"当前我对策略的量化理解（要点式中文摘要）","questions":["问题1","问题2"]}
 
 2. 对齐完成，产出配置：
-{"type":"config","config":{完整的策略配置JSON},"summary":"最终量化口径说明","warnings":["未确认的默认值说明",...]}
+{"type":"config","config":{完整的选股策略配置JSON},"summary":"最终量化口径说明","warnings":["未确认的默认值说明",...]}
 
 对齐规则：
-- 每轮最多追问 3 个问题，聚焦真正影响量化的模糊点：均线参数、幅度阈值、时间窗口、止损止盈、股票池范围
+- 每轮最多追问 3 个问题，聚焦真正影响量化的模糊点：均线参数、幅度阈值、时间窗口、股票池范围
 - 用户明确说过的数值必须原样采用，禁止修改
 - 用户没说的参数用行业常见默认值，并把每个默认值写入 warnings 供审查
 - 信息足够时立即输出 config，不要为了流程而追问；通常 1-2 轮收敛
 - 分阶段叙事（先A后B再C）必须用 within 回看语义表达阶段先后
-- 买多少/加仓/减仓必须用 rules 表达（见规则模型），不要用 entry/exit
-- config 必须可通过 StrategyConfig 校验：指标id全部声明、条件引用可解析、rules 非空且 when 条件非空、universe/risk/backtest_defaults 完整"""
+- config 必须可通过 ScreeningStrategy 校验：指标id全部声明、条件引用可解析、entry 非空且不引用持仓字段、universe 完整"""
 
-_REFERENCE = "完整参考示例（用户描述“阴跌急跌止跌反转回踩进场”时的标准量化输出）：\n" + json.dumps(
-    REFERENCE_STRATEGY, ensure_ascii=False, indent=1
-)
+_TRADING_PROTOCOL = """输出协议（严格遵守）：
+每次只输出一个 JSON 对象，两种形态二选一：
 
-SYSTEM_PROMPT = f"""你是A股量化策略架构师。任务：把用户的自然语言交易策略转化为可回测、可审查的量化配置（StrategyConfig JSON），必要时先向用户提问澄清。
+1. 需要继续对齐：
+{"type":"clarify","understanding":"当前我对策略的量化理解（要点式中文摘要）","questions":["问题1","问题2"]}
 
-{_INDICATOR_CATALOG}
+2. 对齐完成，产出配置：
+{"type":"config","config":{完整的交易策略配置JSON},"summary":"最终量化口径说明","warnings":["未确认的默认值说明",...]}
 
-{_CONDITION_MODEL}
+对齐规则：
+- 每轮最多追问 3 个问题，聚焦真正影响量化的模糊点：均线参数、幅度阈值、时间窗口、止损止盈、补仓/止盈档位与仓位比例
+- 用户明确说过的数值必须原样采用，禁止修改
+- 用户没说的参数用行业常见默认值，并把每个默认值写入 warnings 供审查
+- 信息足够时立即输出 config，不要为了流程而追问；通常 1-2 轮收敛
+- 分阶段叙事（先A后B再C）必须用 within 回看语义表达阶段先后
+- 买多少/加仓/减仓必须用 rules 表达（见规则模型）；风控（止损/止盈/移动止损/最长持仓）用 risk 字段，不写成 rules
+- config 必须可通过 TradingStrategy 校验：指标id全部声明、条件引用可解析、rules 非空、每条 buy 规则必须引用持仓字段、risk/backtest_defaults 完整"""
 
-{_RULES_MODEL}
+_SCREENING_REFERENCE = {
+    "name": "超跌止跌反转",
+    "description": "均线粘合后的超跌急跌，止跌反转信号入场（选股策略示例）",
+    "universe": {"type": "index", "code": "000300.SH"},
+    "indicators": [
+        {"id": "ma5", "kind": "MA", "of": "close", "n": 5},
+        {"id": "ma10", "kind": "MA", "of": "close", "n": 10},
+        {"id": "ma20", "kind": "MA", "of": "close", "n": 20},
+        {"id": "conv", "kind": "MA_CONVERGE", "mas": ["ma5", "ma10", "ma20"]},
+        {"id": "pct3", "kind": "PCT_CHANGE", "of": "close", "n": 3},
+        {"id": "body", "kind": "BODY_RATIO"},
+    ],
+    "entry": {
+        "logic": "all",
+        "conditions": [
+            {"left": "conv", "op": "<=", "right": 2, "note": "均线拧到一块"},
+            {"left": "pct3", "op": "<=", "right": -8, "within": 10, "note": "阴跌之后等急跌"},
+            {"left": "body", "op": ">", "right": 0.5, "note": "止跌阳线"},
+        ],
+    },
+}
 
-config 其余字段：
-- universe：{{"type":"index"|"sector"|"custom"|"all","code":"000300.SH","codes":[...]}}（index/sector需code，custom需codes，all=全市场）
-- risk：{{"stop_loss_pct":8.0,"trailing_stop_pct":null,"max_hold_days":30,"take_profit_pct":null}}（null=禁用；trailing_stop_pct=移动止损%，自持仓期最高价回撤盘中触发）
-- backtest_defaults：{{"start":"2025-01-01","end":"<今天>","initial_cash":1000000,"position_pct":20,"max_positions":5,"fee_bps":2.5,"stamp_tax_bps":5.0}}
-- 注：v2 策略用 rules；entry/exit 是旧版兼容写法，不要再输出
+_TRADING_REFERENCE = {
+    "name": "分批补仓阶梯止盈",
+    "description": "持仓管理：跌5%补仓、涨10%卖1/3、涨20%清仓（交易策略示例）",
+    "indicators": [
+        {"id": "dif", "kind": "MACD_DIF", "of": "close"},
+        {"id": "dea", "kind": "MACD_DEA", "of": "close"},
+    ],
+    "rules": [
+        {"when": {"logic": "all", "conditions": [{"left": "pnl_pct", "op": "<=", "right": -5}]},
+         "action": "buy", "size_pct": 33.33, "max_times": 1, "note": "下跌5%补仓1/3"},
+        {"when": {"logic": "all", "conditions": [{"left": "pnl_pct", "op": ">=", "right": 10}]},
+         "action": "sell", "size_pct": 33.33, "max_times": 1, "note": "涨10%卖1/3"},
+        {"when": {"logic": "all", "conditions": [{"left": "pnl_pct", "op": ">=", "right": 20}]},
+         "action": "sell", "size_pct": 100, "note": "涨20%清仓"},
+    ],
+    "risk": {"stop_loss_pct": 8.0, "trailing_stop_pct": None, "max_hold_days": None, "take_profit_pct": None},
+    "backtest_defaults": {
+        "start": "2025-01-01", "end": "2025-12-31", "initial_cash": 1000000,
+        "position_pct": 20, "max_positions": 5, "fee_bps": 2.5, "stamp_tax_bps": 5.0,
+    },
+}
 
-{_PROTOCOL}
+VALID_STRATEGY_TYPES = ("screening", "trading")
 
-{_REFERENCE}"""
+
+def _build_system_prompt(strategy_type: str) -> str:
+    """按策略类型生成系统提示词：指标目录共用，输出格式与协议/参考示例不同。"""
+    if strategy_type == "screening":
+        head = "你是A股量化选股策略架构师。任务：把用户的自然语言选股思路转化为可回测、可审查的选股策略（ScreeningStrategy JSON），必要时先向用户提问澄清。"
+        output_spec = _SCREENING_OUTPUT
+        rules_model = ""
+        protocol = _SCREENING_PROTOCOL
+        reference = _SCREENING_REFERENCE
+    else:
+        head = "你是A股量化交易策略架构师。任务：把用户的自然语言交易/持仓管理思路转化为可回测、可审查的交易策略（TradingStrategy JSON），必要时先向用户提问澄清。"
+        output_spec = _TRADING_OUTPUT
+        rules_model = _RULES_MODEL
+        protocol = _TRADING_PROTOCOL
+        reference = _TRADING_REFERENCE
+    return "\n\n".join(
+        part for part in (
+            head,
+            _INDICATOR_CATALOG,
+            _CONDITION_MODEL,
+            rules_model,
+            output_spec,
+            protocol,
+            "完整参考示例：\n" + json.dumps(reference, ensure_ascii=False, indent=1),
+        ) if part
+    )
 
 FORCE_CONFIG_MSG = "对齐轮数已达上限，本轮必须输出 type=config 的完整配置，不要再追问。"
 
@@ -249,11 +319,13 @@ class DeepSeekAligner:
             if m.get("role") not in ("user", "assistant") or not isinstance(m.get("content"), str) or not m["content"].strip():
                 raise LLMParseError("对话格式无效：角色/内容不合法")
 
-    def align(self, messages: list[dict]) -> dict:
+    def align(self, messages: list[dict], strategy_type: str = "screening") -> dict:
+        if strategy_type not in VALID_STRATEGY_TYPES:
+            raise LLMParseError(f"strategy_type 无效：{strategy_type!r}（可选 screening/trading）")
         self._validate_messages(messages)
         round_no = sum(1 for m in messages if m["role"] == "assistant") + 1
         forced = round_no >= MAX_ROUNDS
-        convo: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        convo: list[dict] = [{"role": "system", "content": _build_system_prompt(strategy_type)}]
         if forced:
             convo.append({"role": "system", "content": FORCE_CONFIG_MSG})
         convo.extend({"role": m["role"], "content": m["content"]} for m in messages)
@@ -284,7 +356,7 @@ class DeepSeekAligner:
                 }
             if ptype == "config":
                 try:
-                    cfg = self._build_config(parsed.get("config"), messages)
+                    cfg = self._build_config(parsed.get("config"), messages, strategy_type)
                 except ValidationError as e:
                     log.warning("配置校验失败回炉: %s", e.errors()[:3])
                     convo.append({"role": "assistant", "content": content[:2000]})
@@ -305,11 +377,12 @@ class DeepSeekAligner:
         raise LLMParseError("LLM 连续输出无效，对齐失败", raw=(last_raw or "")[:500])
 
     @staticmethod
-    def _build_config(raw: Any, messages: list[dict]) -> dict:
+    def _build_config(raw: Any, messages: list[dict], strategy_type: str) -> dict:
         if not isinstance(raw, dict):
             raise LLMParseError("config 不是对象")
         cfg = dict(raw)
         cfg["parse_engine"] = "llm"
         cfg["source_text"] = messages[0]["content"]
-        validated = StrategyConfig.parse_obj(cfg)
+        model = ScreeningStrategy if strategy_type == "screening" else TradingStrategy
+        validated = model.parse_obj(cfg)
         return validated.dict()

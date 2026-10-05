@@ -1,23 +1,24 @@
-"""FastAPI routes: settings, strategy alignment/CRUD, screening/backtest jobs, kline, search."""
+"""FastAPI routes: settings, strategy alignment/CRUD, screening/backtest jobs, kline, search, analyses."""
 from __future__ import annotations
 
 from typing import Any, Optional, Union
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, conlist
+from pydantic import BaseModel, ValidationError, conlist
 
-from .backtest import backtest
+from .backtest import backtest_pool
 from .data_service import DataService
 from .fuyao import FuyaoClient, FuyaoError
 from .jobs import JobRunner
 from .kline import PERIODS, build_kline_response
 from .llm_align import LLMNotConfigured, LLMParseError, DeepSeekAligner
-from .screener import screen
-from .schema import StrategyConfig
+from .schema import ScreeningStrategy, TradingStrategy, Universe, _valid_date
+from .screener import screen_range
 from .storage import Storage
 
 LLM_NOT_CONFIGURED_CODE = "llm_not_configured"
+STRATEGY_TYPES = ("screening", "trading")
 
 
 class ApiError(Exception):
@@ -50,30 +51,38 @@ class SettingsUpdate(BaseModel):
 
 class ParseRequest(BaseModel):
     messages: conlist(dict, min_items=1)  # type: ignore[valid-type]
+    strategy_type: str = "screening"  # "screening"（选股策略）| "trading"（交易策略），UI 按 Tab 区分
 
 
 class StrategyCreate(BaseModel):
-    config: StrategyConfig
+    config: Union[ScreeningStrategy, TradingStrategy]
+    type: Optional[str] = None  # "screening" | "trading"；缺省按 config 结构推断（有 rules → trading）
 
 
 class ScreenRequest(BaseModel):
-    strategy_id: Optional[int] = None
-    config: Optional[StrategyConfig] = None
+    strategy_id: Optional[int] = None  # 指向 screening 策略
+    config: Optional[ScreeningStrategy] = None
+    start: str
+    end: str
     universe: Optional[dict] = None
-    as_of: Optional[str] = None
 
 
 class BacktestRequest(BaseModel):
-    strategy_id: Optional[int] = None
-    config: Optional[StrategyConfig] = None
+    trading_strategy_id: Optional[int] = None  # 指向 trading 策略
+    config: Optional[TradingStrategy] = None
+    pool: conlist(dict, min_items=1)  # type: ignore[valid-type]  # [{thscode, name, signal_date}]
     start: Optional[str] = None
     end: Optional[str] = None
     initial_cash: Optional[float] = None
     position_pct: Optional[float] = None
-    max_positions: Optional[int] = None
     fee_bps: Optional[float] = None
     stamp_tax_bps: Optional[float] = None
-    universe: Optional[dict] = None
+
+
+class BacktestAnalysisCreate(BaseModel):
+    trading_strategy_id: int
+    params: dict
+    result: dict
 
 
 def _mask(key: str | None) -> str | None:
@@ -97,13 +106,59 @@ def _settings_view(core: Core) -> dict:
     }
 
 
-def _resolve_config(core: Core, strategy_id: int | None, config: StrategyConfig | None) -> StrategyConfig:
+def _infer_strategy_type(config) -> str:
+    return "trading" if isinstance(config, TradingStrategy) else "screening"
+
+
+def _strategy_type(body: StrategyCreate) -> str:
+    """策略类型：显式 type 优先；缺省按 config 结构推断；type 与结构矛盾 → 400。"""
+    inferred = _infer_strategy_type(body.config)
+    if body.type is not None:
+        if body.type not in STRATEGY_TYPES:
+            raise ApiError(400, "bad_request", f"type 必须是 screening/trading，收到: {body.type}")
+        if body.type != inferred:
+            raise ApiError(400, "bad_request", f"type={body.type} 与 config 结构不符（应为 {inferred}）")
+    return body.type or inferred
+
+
+def _resolve_screening_strategy(
+    core: Core, strategy_id: int | None, config: ScreeningStrategy | None
+) -> ScreeningStrategy:
     if config is not None:
         return config
     if strategy_id is not None:
-        detail = core.storage.get_strategy(strategy_id)
-        return StrategyConfig.parse_obj(detail["current"])
+        try:
+            detail = core.storage.get_strategy(strategy_id)
+            return ScreeningStrategy.parse_obj(detail["current"])
+        except KeyError as e:
+            raise ApiError(404, "not_found", f"策略 {strategy_id} 不存在") from e
+        except ValidationError as e:
+            raise ApiError(400, "bad_request", f"策略 {strategy_id} 不是选股策略") from e
     raise ApiError(400, "bad_request", "strategy_id 与 config 必须提供其一")
+
+
+def _resolve_trading_strategy(
+    core: Core, strategy_id: int | None, config: TradingStrategy | None
+) -> TradingStrategy:
+    if config is not None:
+        return config
+    if strategy_id is not None:
+        try:
+            detail = core.storage.get_strategy(strategy_id)
+            return TradingStrategy.parse_obj(detail["current"])
+        except KeyError as e:
+            raise ApiError(404, "not_found", f"策略 {strategy_id} 不存在") from e
+        except ValidationError as e:
+            raise ApiError(400, "bad_request", f"策略 {strategy_id} 不是交易策略") from e
+    raise ApiError(400, "bad_request", "trading_strategy_id 与 config 必须提供其一")
+
+
+def _validate_dates(start: str, end: str) -> None:
+    for k, v in (("start", start), ("end", end)):
+        try:
+            _valid_date(v)
+        except ValueError as e:
+            raise ApiError(400, "bad_request", f"{k} 日期格式错误: {v}") from e
 
 
 def register_routes(app: FastAPI, core: Core) -> None:
@@ -165,7 +220,7 @@ def register_routes(app: FastAPI, core: Core) -> None:
             model=s.get("llm_model") or "deepseek-chat",
         )
         try:
-            return aligner.align(body.messages)
+            return aligner.align(body.messages, body.strategy_type)
         except LLMParseError as e:
             raise ApiError(400, "llm_parse_failed", str(e), raw=e.raw) from e
         finally:
@@ -173,12 +228,15 @@ def register_routes(app: FastAPI, core: Core) -> None:
 
     # ---- strategies ----
     @app.get("/api/strategies")
-    def list_strategies():
-        return {"items": core.storage.list_strategies()}
+    def list_strategies(type: Optional[str] = None):
+        return {"items": core.storage.list_strategies(type)}
 
     @app.post("/api/strategies")
     def create_strategy(body: StrategyCreate):
-        return core.storage.create_strategy(body.config.dict())
+        stype = _strategy_type(body)
+        created = core.storage.create_strategy(body.config.dict(), type=stype)
+        created["type"] = stype
+        return created
 
     @app.get("/api/strategies/{sid}")
     def get_strategy(sid: int):
@@ -189,10 +247,13 @@ def register_routes(app: FastAPI, core: Core) -> None:
 
     @app.put("/api/strategies/{sid}")
     def update_strategy(sid: int, body: StrategyCreate):
+        stype = _strategy_type(body)
         try:
-            return core.storage.update_strategy(sid, body.config.dict())
+            updated = core.storage.update_strategy(sid, body.config.dict(), type=stype)
         except KeyError as e:
             raise ApiError(404, "not_found", f"策略 {sid} 不存在") from e
+        updated["type"] = stype
+        return updated
 
     @app.delete("/api/strategies/{sid}")
     def delete_strategy(sid: int):
@@ -218,43 +279,37 @@ def register_routes(app: FastAPI, core: Core) -> None:
     # ---- jobs ----
     @app.post("/api/screen")
     def start_screen(body: ScreenRequest):
-        cfg = _resolve_config(core, body.strategy_id, body.config)
+        cfg = _resolve_screening_strategy(core, body.strategy_id, body.config)
         if body.universe:
-            cfg = cfg.copy(update={"universe": type(cfg.universe).parse_obj(body.universe)})
+            cfg = cfg.copy(update={"universe": Universe.parse_obj(body.universe)})
+        _validate_dates(body.start, body.end)
 
         def run_screen(progress_cb):
-            return screen(cfg, core.data, as_of=body.as_of, progress_cb=progress_cb)
+            return screen_range(cfg, core.data, body.start, body.end, progress_cb=progress_cb)
 
         return {"job_id": core.jobs.submit("screen", run_screen)}
 
     @app.post("/api/backtest")
     def start_backtest(body: BacktestRequest):
-        cfg = _resolve_config(core, body.strategy_id, body.config)
+        cfg = _resolve_trading_strategy(core, body.trading_strategy_id, body.config)
         d = cfg.backtest_defaults
         p = {
             "start": body.start or d.start,
             "end": body.end or d.end,
             "initial_cash": body.initial_cash or d.initial_cash,
             "position_pct": body.position_pct or d.position_pct,
-            "max_positions": body.max_positions or d.max_positions,
             "fee_bps": body.fee_bps if body.fee_bps is not None else d.fee_bps,
             "stamp_tax_bps": body.stamp_tax_bps if body.stamp_tax_bps is not None else d.stamp_tax_bps,
         }
-        from .schema import _valid_date
-
-        for k in ("start", "end"):
-            try:
-                _valid_date(p[k])
-            except ValueError as e:
-                raise ApiError(400, "bad_request", f"{k} 日期格式错误: {p[k]}") from e
+        _validate_dates(p["start"], p["end"])
 
         def run_bt(progress_cb):
-            result = backtest(cfg, p, core.data, progress_cb=progress_cb)
-            result["params"]["strategy_id"] = body.strategy_id
+            result = backtest_pool(cfg, body.pool, p, core.data, progress_cb=progress_cb)
+            result["params"]["strategy_id"] = body.trading_strategy_id
             result["params"]["strategy_name"] = cfg.name
             result["params"]["strategy_version"] = None
-            if body.strategy_id is not None:
-                detail = core.storage.get_strategy(body.strategy_id)
+            if body.trading_strategy_id is not None:
+                detail = core.storage.get_strategy(body.trading_strategy_id)
                 result["params"]["strategy_version"] = detail["version"]
             return result
 
@@ -266,6 +321,16 @@ def register_routes(app: FastAPI, core: Core) -> None:
         if job is None:
             raise ApiError(404, "not_found", f"任务 {job_id} 不存在")
         return job
+
+    # ---- backtest analyses ----
+    @app.post("/api/backtest_analyses")
+    def save_backtest_analysis(body: BacktestAnalysisCreate):
+        aid = core.storage.save_analysis(body.trading_strategy_id, body.params, body.result)
+        return {"id": aid}
+
+    @app.get("/api/backtest_analyses")
+    def list_backtest_analyses(trading_strategy_id: Optional[int] = None):
+        return {"items": core.storage.list_analyses(trading_strategy_id)}
 
     # ---- market data ----
     @app.get("/api/kline")
