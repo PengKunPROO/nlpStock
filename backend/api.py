@@ -223,6 +223,8 @@ def register_routes(app: FastAPI, core: Core) -> None:
             return aligner.align(body.messages, body.strategy_type)
         except LLMParseError as e:
             raise ApiError(400, "llm_parse_failed", str(e), raw=e.raw) from e
+        except Exception as e:  # 防御：任何意外异常转 400，避免 500 内部错误
+            raise ApiError(400, "llm_parse_failed", f"解析出错：{e}") from e
         finally:
             aligner.close()
 

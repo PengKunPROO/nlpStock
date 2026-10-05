@@ -78,7 +78,7 @@ class FuyaoClient:
                 continue
             data = resp.json()
             code = data.get("code", -1)
-            if code == 4001:
+            if code == 4001:  # 4001=频率超限(限流) → 退避重试
                 last_err = FuyaoError(4001, data.get("message", "rate limited"))
                 continue
             if code != 0:

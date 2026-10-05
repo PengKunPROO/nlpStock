@@ -64,6 +64,13 @@ def create_app(
     missing = {k: v for k, v in defaults.items() if not s.get(k) and v}
     if missing:
         storage.update_settings(missing)
+    # 首次启动自动部署内置种子策略（幂等：已存在则跳过），确保有 universe=all 的选股策略可用
+    try:
+        from .seed import seed_strategies
+
+        seed_strategies(storage)
+    except Exception as e:  # seed 失败不阻塞启动
+        log.warning("seed 策略部署失败: %s", e)
     if core is None:
         core = Core(storage, storage.get_settings().get("fuyao_api_key") or "")
     register_routes(app, core)

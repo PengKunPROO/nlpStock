@@ -5,7 +5,9 @@ import { esc, h, toast } from '../util.js';
 
 const EXAMPLE_TEXT = '1，阴跌之后等急跌，\n2，急跌之后等止跌，(均线拧到一块是止跌信号)\n3，止跌之后等反转(底部放量，阳线实体越来越大，价格站上关键均线才是反转信号)，\n4，反转之后等进场(拉一波再缩量回踩不破前期箱体上沿，确认支撑有效，说明主力锁仓，这时候才可以进)，\n5，力竭出现，因为量能跟不上，出现上影线，越来越短的阳线，都是力竭信号\n6，力竭后的离场，不舍得卖啊，这时落袋才是利润，\n7，离场之后等待回落，千万别追，\n8，回调支撑如果被击穿就不要进了。';
 
-let alignMessages = []; // 对齐对话历史（模块级，切tab保留）
+const alignMessages = { screening: [], trading: [] }; // 对齐对话历史（按策略类型分存，切 tab/type 均保留）
+const chatDrafts = { screening: '', trading: '' }; // 输入草稿（按类型分存，切 tab 保留）
+const subByType = { screening: 'list', trading: 'list' }; // 各类型的子视图状态（list/new/review/detail）
 
 const TYPE_TABS = [
   { v: 'screening', label: '选股策略' },
@@ -28,8 +30,9 @@ function renderTypeSeg(view) {
     b.onclick = () => {
       if (t.v === cur) return;
       view.dataset.stratType = t.v;
-      alignMessages = [];
-      go('list');
+      const prev = subByType[t.v] || 'list';
+      // review/detail 依赖当前类型的 draftConfig/sid，切换类型后不适用，回退到 list
+      go(prev === 'review' || prev === 'detail' ? 'list' : prev);
     };
     seg.appendChild(b);
   }
@@ -47,6 +50,7 @@ export async function renderStrategyView(view) {
 function go(sub, extra = {}) {
   const v = document.getElementById('view');
   v.dataset.sub = sub;
+  subByType[currentType(v)] = sub; // 记录各类型的子视图状态
   for (const [k, val] of Object.entries(extra)) v.dataset[k] = val;
   v.dispatchEvent(new CustomEvent('rerender'));
 }
@@ -85,7 +89,7 @@ async function renderList(view) {
     <button class="btn" id="new-strategy" style="margin-bottom:14px">＋ 新建${tLabel}策略（自然语言）</button>
     ${items.length ? cards : `<div class="card"><div class="empty">还没有${tLabel}策略。<br>用一句自然语言描述你的${tLabel === '选股' ? '选股思路' : '交易规则'}，AI 会帮你量化。</div></div>`}`;
   renderTypeSeg(view);
-  document.getElementById('new-strategy').onclick = () => { alignMessages = []; go('new'); };
+  document.getElementById('new-strategy').onclick = () => { alignMessages[currentType(view)] = []; chatDrafts[currentType(view)] = ''; go('new'); };
   view.querySelectorAll('[data-sid]').forEach((el) => {
     el.onclick = () => go('detail', { sid: el.dataset.sid });
   });
@@ -124,6 +128,8 @@ function renderChat(view) {
   const list = document.getElementById('chat-list');
   const input = document.getElementById('chat-input');
   const sendBtn = document.getElementById('chat-send');
+  input.value = chatDrafts[type] || ''; // 恢复草稿（切 tab 后保留）
+  input.addEventListener('input', () => { chatDrafts[type] = input.value; });
 
   const appendBubble = (role, html) => {
     list.appendChild(h(`<div class="bubble ${role}">${html}</div>`));
@@ -139,11 +145,11 @@ function renderChat(view) {
 
   const renderHistory = () => {
     list.innerHTML = '';
-    for (const m of alignMessages) {
+    for (const m of alignMessages[type]) {
       if (m.role === 'user') appendBubble('me', esc(m.content));
       else appendBubble('ai', m.html || esc(m.content));
     }
-    if (!alignMessages.length) {
+    if (!alignMessages[type].length) {
       appendBubble('ai', type === 'trading'
         ? '你好，我是交易策略量化助手。<br>请描述你的交易规则 —— 建仓条件、仓位管理（补仓/加仓）、卖出条件（止盈/止损/移动止损）等，越具体越好。'
         : '你好，我是选股策略量化助手。<br>请描述你的选股策略 —— 越具体越好（哪些均线、大致幅度、止损偏好等）。也可以直接点下方「填入示例策略」。');
@@ -155,17 +161,18 @@ function renderChat(view) {
     const text = input.value.trim();
     if (!text) return;
     input.value = '';
-    alignMessages.push({ role: 'user', content: text });
+    chatDrafts[type] = ''; // 发送后清空草稿
+    alignMessages[type].push({ role: 'user', content: text });
     appendBubble('me', esc(text));
     sendBtn.disabled = true;
     let typing;
     try {
       typing = showTyping();
-      const resp = await api.parseStrategy(alignMessages.map(({ role, content }) => ({ role, content })), type);
+      const resp = await api.parseStrategy(alignMessages[type].map(({ role, content }) => ({ role, content })), type);
       if (typing) typing.remove();
       if (resp.type === 'clarify') {
         const qHtml = `<div class="q-title">当前量化理解</div>${esc(resp.understanding || '')}<div class="q-title" style="margin-top:8px">请确认 ${resp.round}/4</div><ol>${resp.questions.map((q) => `<li>${esc(q)}</li>`).join('')}</ol>`;
-        alignMessages.push({ role: 'assistant', content: `${resp.understanding}\n${resp.questions.join('\n')}`, html: qHtml });
+        alignMessages[type].push({ role: 'assistant', content: `${resp.understanding}\n${resp.questions.join('\n')}`, html: qHtml });
         appendBubble('ai', qHtml);
         input.placeholder = '回答 AI 的问题（可一次性回答多个）…';
       } else {
@@ -181,8 +188,9 @@ function renderChat(view) {
       } else {
         appendBubble('ai', `<span class="up">解析失败：${esc(e.message || String(e))}</span><br>请换个说法重试，或补充更多细节。`);
       }
-      alignMessages.pop(); // 移除本轮用户消息以便重发
+      alignMessages[type].pop(); // 移除本轮用户消息以便重发
       input.value = text;
+      chatDrafts[type] = text; // 恢复草稿
     } finally {
       sendBtn.disabled = false;
     }
