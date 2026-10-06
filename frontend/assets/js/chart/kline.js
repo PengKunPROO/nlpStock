@@ -28,6 +28,8 @@ export function renderKline(canvas, bars, opts = {}) {
   const padL = 6, padR = 52, padT = 8, padB = 18, gap = 10;
   // 布局几何（draw 时更新，交互读取）
   let step = 1, plotW = 0, bodyBottom = 0;
+  // 十字光标（拖动跟随）：{ vidx(可见索引) }
+  let crosshair = null;
 
   const draw = () => {
     const visible = bars.slice(offset, offset + visibleCount);
@@ -172,8 +174,24 @@ export function renderKline(canvas, bars, opts = {}) {
     ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.font = '600 10px -apple-system, sans-serif';
     ctx.fillText(fmt(last.close), padL + plotW + 1 + (padR - 3) / 2, yLast + 3.5);
 
-    // 点击高亮虚线
-    if (highlightIdx !== undefined) {
+    // 十字光标（拖动跟随）：垂直线 + 水平线 + 顶部日期标签
+    if (crosshair && crosshair.vidx >= 0 && crosshair.vidx < n) {
+      const x = padL + crosshair.vidx * step + step / 2;
+      const b = visible[crosshair.vidx];
+      const y = yMain(b.close);
+      ctx.strokeStyle = cText3; ctx.globalAlpha = 0.6; ctx.setLineDash([3, 3]); ctx.lineWidth = 0.5;
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + mainH + gap + volH); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+      ctx.fillStyle = cText3; ctx.textAlign = 'center'; ctx.font = '600 11px -apple-system, sans-serif';
+      const label = (b.date || '').slice(5);
+      const lw = ctx.measureText(label).width + 12;
+      const lx = Math.min(Math.max(padL, x - lw / 2), padL + plotW - lw);
+      roundRect(ctx, lx, padT + 1, lw, 16, 3);
+      ctx.fillStyle = cText3; ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.fillText(label, lx + lw / 2, padT + 13);
+    } else if (highlightIdx !== undefined) {
+      // 点击高亮虚线
       const x = padL + highlightIdx * step + step / 2;
       ctx.strokeStyle = cText3; ctx.globalAlpha = 0.5; ctx.setLineDash([3, 3]);
       ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + mainH + gap + volH); ctx.stroke();
@@ -209,26 +227,38 @@ export function renderKline(canvas, bars, opts = {}) {
       draw();
       return;
     }
-    // 开始拖动（纯平移，不显示十字光标/浮层）
+    // 开始拖动：显示十字光标 + 浮层（手指位置对应的 K 线）
     dragStartX = ev.clientX;
     dragStartOffset = offset;
     moved = false;
+    const vidx = toIdx(ev.clientX, ev.clientY);
+    crosshair = { vidx: vidx === null ? -1 : vidx };
+    if (opts.onCrosshair) opts.onCrosshair(vidx === null ? null : bars[offset + vidx], pos, rect.width);
     canvas.setPointerCapture(ev.pointerId);
+    draw();
   };
   const onPointerMove = (ev) => {
     if (dragStartX === null) return;
+    const rect = canvas.getBoundingClientRect();
+    const pos = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
     const dx = ev.clientX - dragStartX;
     if (Math.abs(dx) > 6) moved = true;
-    if (!moved) return; // 未达拖动阈值：等待（松手视为点击）
-    const delta = Math.round(dx / step);
-    if (delta !== 0) {
-      const newOffset = Math.max(0, Math.min(total - visibleCount, dragStartOffset - delta));
-      if (newOffset !== offset) {
-        offset = newOffset;
-        if (opts.onOffsetChange) opts.onOffsetChange(offset);
-        draw();
+    // 平移 K 线（达到拖动阈值后）
+    if (moved) {
+      const delta = Math.round(dx / step);
+      if (delta !== 0) {
+        const newOffset = Math.max(0, Math.min(total - visibleCount, dragStartOffset - delta));
+        if (newOffset !== offset) {
+          offset = newOffset;
+          if (opts.onOffsetChange) opts.onOffsetChange(offset);
+        }
       }
     }
+    // 十字光标跟随手指 + 浮层实时显示划到位置的 K 线信息
+    const vidx = toIdx(ev.clientX, ev.clientY);
+    crosshair = { vidx: vidx === null ? -1 : vidx };
+    if (opts.onCrosshair) opts.onCrosshair(vidx === null ? null : bars[offset + vidx], pos, rect.width);
+    draw();
   };
   const onPointerUp = (ev) => {
     if (dragStartX === null) return;
@@ -236,8 +266,10 @@ export function renderKline(canvas, bars, opts = {}) {
     const pos = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
     dragStartX = null;
     if (!moved) {
-      // 位移小 → 视为点击（显示浮层）
+      // 位移小 → 视为点击（显示浮层，用高亮虚线替代十字光标）
       const vidx = toIdx(ev.clientX, ev.clientY);
+      crosshair = null;
+      if (opts.onCrosshair) opts.onCrosshair(null, pos, rect.width);
       if (vidx === null) {
         if (highlightIdx !== undefined) { highlightIdx = undefined; draw(); }
         if (opts.onBlankTap) opts.onBlankTap(pos, rect.width);
@@ -248,7 +280,10 @@ export function renderKline(canvas, bars, opts = {}) {
       draw();
       return;
     }
-    // 拖动结束：纯平移，无后续动作
+    // 拖动结束：隐藏十字光标 + 浮层
+    crosshair = null;
+    if (opts.onCrosshair) opts.onCrosshair(null, pos, rect.width);
+    draw();
   };
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);
