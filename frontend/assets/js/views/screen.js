@@ -26,6 +26,17 @@ export async function renderScreenView(view) {
           ${strategies.map((s) => `<option value="${s.id}" ${pre && pre.id === s.id ? 'selected' : ''}>${esc(s.name)}（v${s.version}）</option>`).join('')}
         </select>
       </div>
+      <div class="field">
+        <label>股票池（覆盖策略默认）</label>
+        <select id="sc-universe">
+          <option value="">跟随策略默认</option>
+          <option value="index:000300.SH">沪深300</option>
+          <option value="index:000905.SH">中证500</option>
+          <option value="index:399006.SZ">创业板指</option>
+          <option value="index:000016.SH">上证50</option>
+          <option value="all">全市场</option>
+        </select>
+      </div>
       <div class="field-row">
         <div class="field"><label>开始日期</label><input id="sc-start" type="date" value="${daysAgo(90)}"></div>
         <div class="field"><label>结束日期</label><input id="sc-end" type="date" value="${dateToday()}"></div>
@@ -54,7 +65,11 @@ export async function renderScreenView(view) {
         <div class="muted" style="font-size:12px;margin-top:6px">正在按区间扫描K线并评估入场条件</div>
       </div>`;
     try {
-      const { job_id } = await api.screen({ strategy_id: sid, start, end });
+      const uniVal = document.getElementById('sc-universe').value;
+      const payload = { strategy_id: sid, start, end };
+      if (uniVal === 'all') payload.universe = { type: 'all' };
+      else if (uniVal) { const [utype, ucode] = uniVal.split(':'); payload.universe = { type: utype, code: ucode }; }
+      const { job_id } = await api.screen(payload);
       const result = await pollJob(job_id, (job) => {
         const p = job.progress || { done: 0, total: 0 };
         const lbl = document.getElementById('pg-label');

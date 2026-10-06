@@ -10,7 +10,11 @@ const PERIODS = [
 const maVisible = { ma5: true, ma10: true, ma20: true, ma60: true };
 let cleanupFn = null;
 let selectedIdx = null; // 当前浮层对应的 K 线索引（null = 浮层关闭）
-let klineCount = 120; // 当前加载的 K 线根数（加载更早/滑动时递增）
+const VISIBLE_COUNT = 60; // 可见 K 线根数（固定 → 左右滑动是平移而非缩放）
+const TOTAL_LOAD = 500; // 一次加载的 K 线根数（后端上限）
+let allBars = []; // 已加载的全部 K 线
+let startIdx = 0; // 视窗起点（0=最新，越大越早）
+let allMarkers = []; // 信号点标注（全局索引）
 
 export async function renderChartView(view) {
   const code = state.chartCode || '600519.SH';
@@ -36,7 +40,7 @@ export async function renderChartView(view) {
   bindSearch(view);
   renderPeriodSeg();
   renderLegend();
-  document.getElementById('load-earlier').onclick = () => { klineCount += 120; loadChart(code, view.dataset.period || '1d', true); };
+  document.getElementById('load-earlier').onclick = () => { startIdx = Math.min(allBars.length - VISIBLE_COUNT, startIdx + VISIBLE_COUNT); renderVisible(); };
   bindSwipe(view, code);
   await loadChart(code, view.dataset.period || '1d');
 }
@@ -50,7 +54,7 @@ function renderPeriodSeg() {
     b.onclick = () => {
       document.getElementById('view').dataset.period = p.v;
       renderPeriodSeg();
-      klineCount = 120; // 切换周期重置窗口
+      startIdx = 0; // 切换周期重置窗口
       loadChart(state.chartCode || '600519.SH', p.v);
     };
     seg.appendChild(b);
@@ -65,7 +69,7 @@ function renderLegend() {
     chip.onclick = () => {
       maVisible[m.key] = !maVisible[m.key];
       chip.style.opacity = maVisible[m.key] ? '1' : '0.35';
-      loadChart(state.chartCode || '600519.SH', document.getElementById('view').dataset.period || '1d', true);
+      renderVisible(); // MA 切换只重绘，不重新请求
     };
     if (!maVisible[m.key]) chip.style.opacity = '0.35';
     el.appendChild(chip);
@@ -123,8 +127,12 @@ function bindSwipe(view, code) {
     const dy = e.clientY - sy;
     dragging = false; sx = null; sy = null;
     if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return; // 太小或偏垂直 → 视为点击
-    if (dx < 0) { klineCount += 120; loadChart(code, view.dataset.period || '1d', true); } // 左滑更早
-    else { klineCount = Math.max(120, klineCount - 120); loadChart(code, view.dataset.period || '1d', true); } // 右滑更近
+    if (dx < 0) { // 左滑 → 看更早（视窗后移）
+      startIdx = Math.min(allBars.length - VISIBLE_COUNT, startIdx + VISIBLE_COUNT);
+    } else { // 右滑 → 看更近（视窗前移）
+      startIdx = Math.max(0, startIdx - VISIBLE_COUNT);
+    }
+    renderVisible();
   });
 }
 
@@ -136,10 +144,17 @@ async function loadChart
   if (!head || !canvas) return;
   if (!silent) head.innerHTML = '<div class="skeleton" style="height:52px"></div>';
   try {
-    const count = klineCount;
+    const count = TOTAL_LOAD;
     const data = await api.kline(code, period, count);
     state.chartCode = code;
     document.title = `${data.name} · 策略选股`;
+    allBars = data.bars;
+    startIdx = 0;
+    allMarkers = [];
+    if (state.chartSignalDate) {
+      const si = allBars.findIndex((b) => b.date === state.chartSignalDate);
+      if (si !== -1) allMarkers.push({ idx: si, type: 'signal', price: allBars[si].close, detail: { date: state.chartSignalDate, close: allBars[si].close } });
+    }
     const chg = data.change_pct;
     head.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:baseline">
@@ -157,46 +172,52 @@ async function loadChart
     document.getElementById('vol-chip').innerHTML = `
       <span class="${trendChip}" style="font-weight:600">${esc(vs.trend || '量能平稳')}</span>
       <span class="muted" style="font-size:12px;margin-left:8px">${esc(vs.note || '')}</span>`;
-    if (cleanupFn) cleanupFn();
-    hideTip();
-    selectedIdx = null;
-    // 信号点标注：从选股结果点击带来的 signal_date
-    const markers = [];
-    if (state.chartSignalDate) {
-      const si = data.bars.findIndex((b) => b.date === state.chartSignalDate);
-      if (si !== -1) markers.push({ idx: si, type: 'signal', price: data.bars[si].close, detail: { date: state.chartSignalDate, close: data.bars[si].close } });
-    }
-    cleanupFn = renderKline(canvas, data.bars, {
-      ...maVisible,
-      markers,
-      onBarTap: (bar, idx, pos, width) => {
-        if (idx === selectedIdx) {
-          // 再次点击同一根 K 线：切换关闭浮层
-          selectedIdx = null;
-          hideTip();
-          return false; // 通知 kline 不要绘制高亮虚线
-        }
-        selectedIdx = idx;
-        showTip(tip, bar, pos, width);
-      },
-      onMarkerTap: (m, pos, width) => {
-        // 信号点点击：显示信号日
-        const d = m.detail || {};
-        tip.innerHTML = `<div style="font-weight:700;margin-bottom:2px"><span class="chip accent" style="font-size:11px">选股信号</span> ${esc(d.date)}</div>
-          <div class="t-row"><span>收盘</span><span class="mono">${fmtPrice(d.close ?? m.price)}</span></div>`;
-        placeTip(tip, pos, width);
-      },
-      onBlankTap: () => {
-        // 点击 K 线 canvas 的空白区域（图身之外）
-        selectedIdx = null;
-        hideTip();
-      },
-    });
+    renderVisible();
   } catch (e) {
     head.innerHTML = `<div class="empty" style="padding:18px">加载失败：${esc(e.message || String(e))}
       <div style="margin-top:10px"><button class="btn sm secondary" id="retry-kline">重试</button></div></div>`;
     document.getElementById('retry-kline').onclick = () => loadChart(code, period);
   }
+}
+
+// 渲染当前视窗 [startIdx, startIdx+VISIBLE_COUNT)：K 线根数固定，左右滑动/加载更早 = 平移而非缩放
+function renderVisible() {
+  const canvas = document.getElementById('kline-canvas');
+  const tip = document.getElementById('kline-tip');
+  if (!canvas || !allBars.length) return;
+  const visible = allBars.slice(startIdx, startIdx + VISIBLE_COUNT);
+  const markers = allMarkers
+    .map((m) => ({ ...m, idx: m.idx - startIdx }))
+    .filter((m) => m.idx >= 0 && m.idx < VISIBLE_COUNT);
+  if (cleanupFn) cleanupFn();
+  hideTip();
+  selectedIdx = null;
+  cleanupFn = renderKline(canvas, visible, {
+    ...maVisible,
+    markers,
+    onBarTap: (bar, idx, pos, width) => {
+      if (idx === selectedIdx) {
+        // 再次点击同一根 K 线：切换关闭浮层
+        selectedIdx = null;
+        hideTip();
+        return false; // 通知 kline 不要绘制高亮虚线
+      }
+      selectedIdx = idx;
+      showTip(tip, bar, pos, width);
+    },
+    onMarkerTap: (m, pos, width) => {
+      // 信号点点击：显示信号日
+      const d = m.detail || {};
+      tip.innerHTML = `<div style="font-weight:700;margin-bottom:2px"><span class="chip accent" style="font-size:11px">选股信号</span> ${esc(d.date)}</div>
+        <div class="t-row"><span>收盘</span><span class="mono">${fmtPrice(d.close ?? m.price)}</span></div>`;
+      placeTip(tip, pos, width);
+    },
+    onBlankTap: () => {
+      // 点击 K 线 canvas 的空白区域（图身之外）
+      selectedIdx = null;
+      hideTip();
+    },
+  });
 }
 
 function placeTip(tip, pos, width) {
