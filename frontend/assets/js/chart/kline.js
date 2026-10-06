@@ -210,9 +210,8 @@ export function renderKline(canvas, bars, opts = {}) {
     return Math.max(0, Math.min(visibleCount - 1, Math.floor(x / step)));
   };
 
-  let dragStartX = null, moved = false;
+  let dragStartX = null, dragStartY = null, moved = false, horizontal = false;
   const onPointerDown = (ev) => {
-    ev.preventDefault(); // 阻止浏览器默认触摸行为（页面滚动/缩放）
     const rect = canvas.getBoundingClientRect();
     const pos = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
     // 买卖点 marker 命中优先（点击查看详情）
@@ -228,23 +227,27 @@ export function renderKline(canvas, bars, opts = {}) {
       draw();
       return;
     }
-    // 开始拖动：显示十字光标 + 浮层（手指位置对应的 K 线）
+    // 开始拖动：记录起点，等方向判断（水平=十字光标 / 垂直=滚页面）
     dragStartX = ev.clientX;
+    dragStartY = ev.clientY;
     moved = false;
-    const vidx = toIdx(ev.clientX, ev.clientY);
-    crosshair = { vidx: vidx === null ? -1 : vidx };
-    if (opts.onCrosshair) opts.onCrosshair(vidx === null ? null : bars[offset + vidx], pos, rect.width);
+    horizontal = false;
     canvas.setPointerCapture(ev.pointerId);
-    draw();
   };
   const onPointerMove = (ev) => {
     if (dragStartX === null) return;
-    ev.preventDefault(); // 阻止滚动
     const rect = canvas.getBoundingClientRect();
     const pos = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
     const dx = ev.clientX - dragStartX;
-    if (Math.abs(dx) > 6) moved = true;
+    const dy = ev.clientY - dragStartY;
+    // 方向判断（超过阈值才判定，避免点击误判为滑动）
+    if (!moved && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+      moved = true;
+      horizontal = Math.abs(dx) > Math.abs(dy);
+    }
     if (!moved) return;
+    if (!horizontal) return; // 垂直滑动：交给浏览器滚动页面（touch-action: pan-y）
+    ev.preventDefault(); // 水平滑动：阻止任何默认行为
     // 十字光标跟随手指（clamp 到可见范围，不平移 K 线/时间轴）
     const rawX = ev.clientX - rect.left - padL;
     const vidx = Math.max(0, Math.min(visibleCount - 1, Math.floor(rawX / step)));
@@ -272,10 +275,12 @@ export function renderKline(canvas, bars, opts = {}) {
       draw();
       return;
     }
-    // 拖动结束：隐藏十字光标 + 浮层
-    crosshair = null;
-    if (opts.onCrosshair) opts.onCrosshair(null, pos, rect.width);
-    draw();
+    // 水平拖动结束：隐藏十字光标 + 浮层（垂直滑动无动作）
+    if (horizontal) {
+      crosshair = null;
+      if (opts.onCrosshair) opts.onCrosshair(null, pos, rect.width);
+      draw();
+    }
   };
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);

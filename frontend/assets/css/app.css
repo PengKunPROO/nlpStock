@@ -240,7 +240,7 @@ textarea { resize: vertical; min-height: 90px; line-height: 1.45; }
 .kline-tip .link, .kline-tip button { pointer-events: auto; cursor: pointer; }
 .kline-tip .t-row { display: flex; justify-content: space-between; gap: 14px; }
 .kline-tip .t-row span:first-child { color: var(--text-3); }
-canvas.kline, canvas.equity { width: 100%; display: block; touch-action: none; }
+canvas.kline, canvas.equity { width: 100%; display: block; touch-action: pan-y; }
 
 /* kline replay overlay（回测买卖点回放） */
 .replay-overlay {

@@ -31,17 +31,51 @@ export async function renderChartView(view) {
       <canvas id="kline-canvas" class="kline" style="height:440px"></canvas>
       <div id="kline-tip" class="kline-tip" style="display:none"></div>
     </div>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin:2px 4px 0">
-      <span class="link" id="load-earlier" style="font-size:13px">‹ 加载更早</span>
-      <span class="muted" style="font-size:12px">按住左右滑动查看各日 K 线信息</span>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:6px 4px 0">
+      <div style="display:flex;gap:10px;align-items:center">
+        <button class="btn sm secondary" id="shift-prev" style="padding:7px 16px">‹ 更早</button>
+        <button class="btn sm secondary" id="shift-next" style="padding:7px 16px">更新 ›</button>
+      </div>
+      <span class="muted" style="font-size:12px">短按翻半屏 · 长按连续翻</span>
     </div>
-    <div class="hint">按住 K 线左右滑动，十字光标跟随显示该日开高低收；点「加载更早」查看更早历史；点「更多」展开量能详情。</div>
+    <div class="hint">按住 K 线左右滑动，十字光标跟随显示该日开高低收；用「‹更早 / 更新›」按钮翻历史；点「更多」展开量能详情。</div>
   `;
   bindSearch(view);
   renderPeriodSeg();
   renderLegend();
-  document.getElementById('load-earlier').onclick = () => { startIdx = Math.max(0, startIdx - VISIBLE_COUNT); renderVisible(); }; // 看更早（offset 减小）
+  bindTimeShift();
   await loadChart(code, view.dataset.period || '1d');
+}
+
+// 左右按钮翻历史：短按翻半屏，长按（400ms 后）连续翻
+function bindTimeShift() {
+  const STEP = Math.round(VISIBLE_COUNT / 2); // 短按平移半屏（30 根）
+  const shift = (dir) => {
+    const next = Math.max(0, Math.min(allBars.length - VISIBLE_COUNT, startIdx + dir * STEP));
+    if (next !== startIdx) { startIdx = next; renderVisible(); }
+  };
+  const bind = (btn, dir) => {
+    if (!btn) return;
+    let pressTimer = null, holdInterval = null, isLong = false;
+    btn.addEventListener('pointerdown', () => {
+      isLong = false;
+      pressTimer = setTimeout(() => {
+        isLong = true;
+        shift(dir);
+        holdInterval = setInterval(() => shift(dir), 120);
+      }, 400);
+    });
+    const cleanup = () => {
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      if (holdInterval) { clearInterval(holdInterval); holdInterval = null; }
+    };
+    btn.addEventListener('pointerup', cleanup);
+    btn.addEventListener('pointercancel', cleanup);
+    btn.addEventListener('pointerleave', cleanup);
+    btn.addEventListener('click', () => { if (!isLong) shift(dir); });
+  };
+  bind(document.getElementById('shift-prev'), -1); // 更早
+  bind(document.getElementById('shift-next'), +1); // 更新
 }
 
 function renderPeriodSeg() {
