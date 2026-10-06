@@ -9,6 +9,8 @@ const state = {
   screenStrategy: null,   // 选股页预选策略
   strategyTab: 'screening', // 策略页当前 Tab：screening | trading
   screenPicks: [],        // 选股页勾选的池：[{thscode, name, signal_date}]
+  activeScreenJob: null,  // 后台选股任务 { id, status, progress, result, startedAt }
+  activeBacktestJob: null,// 后台回测任务 { id, status, progress, result, startedAt }
 };
 export default state;
 

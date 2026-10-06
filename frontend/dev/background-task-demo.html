@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>后台任务恢复 · 效果预览</title>
+<style>
+  :root {
+    --bg: #F2F2F7; --card: #FFFFFF; --card-2: #F7F7FA; --text: #1C1C1E;
+    --text-2: #3C3C43; --text-3: #8E8E93; --sep: rgba(60,60,67,0.12);
+    --accent: #007AFF; --up: #FA5151; --down: #07C160; --radius: 16px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#000; --card:#1C1C1E; --card-2:#2C2C2E; --text:#F5F5F7; --text-2:#EBEBF5; --text-3:#98989F; --sep:rgba(84,84,88,0.6); --accent:#0A84FF; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans SC",sans-serif; font-size:16px; line-height:1.5; }
+  #app { max-width:420px; margin:0 auto; height:100vh; display:flex; flex-direction:column; }
+  .header { padding:18px 20px 10px; border-bottom:0.5px solid var(--sep); }
+  .header h1 { margin:0; font-size:20px; font-weight:800; }
+  .header .sub { font-size:12px; color:var(--text-3); margin-top:2px; }
+
+  /* 全局后台任务指示器（任何 Tab 都可见） */
+  #job-indicator {
+    display:none; margin:10px 16px 0; padding:8px 12px; border-radius:10px;
+    background:var(--card-2); border:0.5px solid var(--sep); font-size:12px;
+  }
+  #job-indicator.show { display:flex; align-items:center; gap:8px; }
+  #job-indicator .dot { width:8px; height:8px; border-radius:50%; background:var(--accent); animation:blink 1s infinite; }
+  @keyframes blink { 50% { opacity:0.3; } }
+
+  .view { flex:1; overflow-y:auto; padding:16px; }
+  .card { background:var(--card); border-radius:var(--radius); padding:14px 16px; margin-bottom:12px; }
+  .btn { display:block; width:100%; padding:12px; border:none; border-radius:12px; background:var(--accent); color:#fff; font-size:15px; font-weight:600; cursor:pointer; }
+  .btn:active { opacity:0.8; }
+  .hint { font-size:12px; color:var(--text-3); margin-top:10px; line-height:1.6; }
+  .progress { height:8px; border-radius:4px; background:var(--card-2); overflow:hidden; margin:10px 0 6px; }
+  .progress .bar { height:100%; background:var(--accent); border-radius:4px; transition:width 0.3s; }
+  .mono { font-variant-numeric: tabular-nums; }
+
+  .result { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:0.5px solid var(--sep); }
+  .result:last-child { border-bottom:none; }
+  .result .name { font-weight:600; }
+  .result .pnl { font-weight:700; }
+
+  .tabbar { display:flex; border-top:0.5px solid var(--sep); background:var(--card); }
+  .tabbar button { flex:1; padding:14px; border:none; background:none; color:var(--text-3); font-size:14px; cursor:pointer; border-top:2px solid transparent; }
+  .tabbar button.active { color:var(--accent); font-weight:700; border-top-color:var(--accent); }
+
+  .placeholder { text-align:center; padding:60px 20px; color:var(--text-3); font-size:14px; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:6px; font-size:11px; background:var(--card-2); }
+  .badge.running { color:var(--accent); }
+  .badge.done { color:var(--down); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="header">
+    <h1>后台任务恢复 · 效果预览</h1>
+    <div class="sub">提交选股任务 → 切到「图表」→ 切回「选股」，进度不丢、后台继续跑、完成自动出结果</div>
+  </div>
+  <div id="job-indicator"></div>
+  <div class="view" id="view"></div>
+  <div class="tabbar">
+    <button data-tab="screen" class="active">选股</button>
+    <button data-tab="chart">图表</button>
+  </div>
+</div>
+
+<script>
+  // ===== 全局任务状态（跨 Tab 共享，切页不丢） =====
+  const job = { id: null, status: 'idle', progress: 0, total: 5577, result: null };
+
+  let currentTab = 'screen';
+
+  function startJob() {
+    if (job.status === 'running') return;
+    job.id = 'j_demo_' + Date.now();
+    job.status = 'running';
+    job.progress = 0;
+    job.result = null;
+    // 模拟后台慢任务：每 600ms 推进一批（模拟扫描 5577 只票）
+    const timer = setInterval(() => {
+      job.progress += 1 + Math.floor(Math.random() * 4); // 每次 +1~4%
+      if (job.progress >= 100) {
+        job.progress = 100;
+        clearInterval(timer);
+        job.status = 'done';
+        job.result = {
+          matched_count: 42,
+          evaluated: 5577,
+          failed: 3,
+          duration_ms: 18000,
+          matched: [
+            { name: '宁德时代', code: '300750.SZ', pnl: '+12.4%', up: true },
+            { name: '迈瑞医疗', code: '300760.SZ', pnl: '+8.1%', up: true },
+            { name: '东方财富', code: '300059.SZ', pnl: '-2.3%', up: false },
+          ],
+        };
+      }
+      render();
+    }, 600);
+    render();
+  }
+
+  function switchTab(tab) {
+    currentTab = tab;
+    document.querySelectorAll('.tabbar button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+    render();
+  }
+
+  function render() {
+    // 1. 全局后台任务指示器（任何 Tab 都显示）
+    const ind = document.getElementById('job-indicator');
+    if (job.status === 'running') {
+      ind.className = 'show';
+      ind.innerHTML = `<span class="dot"></span><span>后台任务进行中：扫描 ${Math.round(job.progress * job.total / 100).toLocaleString()} / ${job.total.toLocaleString()} 只 · ${job.progress}%</span>`;
+    } else {
+      ind.className = '';
+      ind.innerHTML = '';
+    }
+
+    // 2. 渲染当前 Tab
+    const view = document.getElementById('view');
+    if (currentTab === 'screen') renderScreen(view);
+    else renderChart(view);
+  }
+
+  function renderScreen(view) {
+    if (job.status === 'running') {
+      view.innerHTML = `
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span class="badge running">选股中</span>
+            <span class="mono" style="font-size:13px;color:var(--text-3)">${Math.round(job.progress * job.total / 100).toLocaleString()} / ${job.total.toLocaleString()}</span>
+          </div>
+          <div class="progress"><div class="bar" style="width:${job.progress}%"></div></div>
+          <div class="hint">← 现在切到「图表」页，再切回来，进度条还在（后台没停）。试试看。</div>
+        </div>`;
+    } else if (job.status === 'done' && job.result) {
+      const r = job.result;
+      view.innerHTML = `
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:baseline">
+            <b style="font-size:17px">命中 ${r.matched_count}</b>
+            <span class="muted" style="font-size:12px;color:var(--text-3)">共评估 ${r.evaluated.toLocaleString()} 只 · 耗时 ${(r.duration_ms/1000).toFixed(0)}s</span>
+          </div>
+        </div>
+        <div class="card">
+          ${r.matched.map((m) => `
+            <div class="result">
+              <div><div class="name">${m.name}</div><div style="font-size:12px;color:var(--text-3)">${m.code}</div></div>
+              <span class="pnl" style="color:${m.up ? 'var(--up)' : 'var(--down)'}">${m.pnl}</span>
+            </div>`).join('')}
+        </div>
+        <div class="hint">✅ 任务在后台跑完后，结果自动刷新到了这里（无需手动重进页面）。</div>`;
+    } else {
+      view.innerHTML = `
+        <div class="card">
+          <button class="btn" id="start-btn">开始选股（模拟慢任务）</button>
+          <div class="hint">点「开始选股」后，会模拟一个约 18 秒的慢任务（扫描 5577 只）。期间你可以切到「图表」页再切回来，验证进度不丢。</div>
+        </div>`;
+      document.getElementById('start-btn').onclick = startJob;
+    }
+  }
+
+  function renderChart(view) {
+    view.innerHTML = `
+      <div class="placeholder">
+        <div style="font-size:40px;margin-bottom:12px">📈</div>
+        这里是「图表」页占位<br><br>
+        ${job.status === 'running'
+          ? `<span class="badge running">选股任务仍在后台跑（${job.progress}%）</span>`
+          : '（空闲时切过来，顶部无任务指示）'}
+        <div class="hint" style="margin-top:20px">顶部那条「后台任务进行中」指示器，说明任务不随页面切换而中断。</div>
+      </div>`;
+  }
+
+  document.querySelectorAll('.tabbar button').forEach((b) => b.onclick = () => switchTab(b.dataset.tab));
+  render();
+</script>
+</body>
+</html>

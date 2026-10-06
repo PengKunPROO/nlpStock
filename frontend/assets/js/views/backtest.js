@@ -1,5 +1,6 @@
 // 回测 view: 勾选池独立回测（每票独立账户，不轮动）→ job → 报告（组合汇总 + 合并净值 + 每票明细）
-import { api, pollJob } from '../api.js';
+import { api } from '../api.js';
+import { runJob, getActiveJob } from '../jobs.js';
 import state from '../store.js';
 import { renderEquity } from '../chart/equity.js';
 import { renderKline } from '../chart/kline.js';
@@ -68,28 +69,17 @@ export async function renderBacktestView(view) {
     }
     ev.target.disabled = true;
     ev.target.textContent = '回测中…';
-    const prog = document.getElementById('bt-progress');
-    prog.innerHTML = `<div class="card"><div class="spinner" style="margin:14px auto"></div>
-      <div class="muted" style="text-align:center;font-size:13px" id="bt-pg-label">提交独立回测任务…</div></div>`;
     try {
-      const { job_id } = await api.backtest({
+      // 全局任务：后台轮询，切页不中断；完成后 state.lastBacktestResult 更新 + 自动刷新
+      await runJob('backtest', () => api.backtest({
         trading_strategy_id: Number(sel.value),
         pool: state.screenPicks,
         start: document.getElementById('bt-start').value || undefined,
         end: document.getElementById('bt-end').value || undefined,
         initial_cash: Number(document.getElementById('bt-cash').value) || undefined,
         position_pct: Number(document.getElementById('bt-pos').value) || undefined,
-      });
-      const result = await pollJob(job_id, (job) => {
-        const p = job.progress || { done: 0, total: 0 };
-        const lbl = document.getElementById('bt-pg-label');
-        if (lbl) lbl.textContent = p.total ? `独立回测 ${p.done}/${p.total}（${p.current || ''}）` : '独立回测中…';
-      }, 1000);
-      state.lastBacktestResult = result;
-      prog.innerHTML = '';
-      renderReport(document.getElementById('bt-report'), result);
+      }));
     } catch (e) {
-      prog.innerHTML = '';
       toast(`回测失败：${e.message}`, true);
     } finally {
       ev.target.disabled = false;
@@ -99,7 +89,15 @@ export async function renderBacktestView(view) {
 
   await applyDefaults();
 
-  if (state.lastBacktestResult) renderReport(document.getElementById('bt-report'), state.lastBacktestResult);
+  // 恢复：running 任务显示进度，done 显示报告
+  const job = getActiveJob('backtest');
+  if (job && job.status === 'running') {
+    const p = job.progress || { done: 0, total: 0 };
+    document.getElementById('bt-progress').innerHTML = `<div class="card"><div class="spinner" style="margin:14px auto"></div>
+      <div class="muted" style="text-align:center;font-size:13px">${p.total ? `独立回测 ${p.done}/${p.total}（${esc(p.current || '')}）` : '独立回测中…'}（切页后后台继续）</div></div>`;
+  } else if (state.lastBacktestResult) {
+    renderReport(document.getElementById('bt-report'), state.lastBacktestResult);
+  }
 }
 
 // 回测池卡片：chips（可删除）+ 空态（提示去选股页勾选 + 跳转按钮）

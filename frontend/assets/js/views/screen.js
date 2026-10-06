@@ -1,5 +1,6 @@
 // 选股 view: screening 策略 + 区间 [start,end] → job progress → 结果（勾选 → 带去回测）
-import { api, pollJob } from '../api.js';
+import { api } from '../api.js';
+import { runJob, getActiveJob } from '../jobs.js';
 import { navigate } from '../app.js';
 import state from '../store.js';
 import { dateToday, daysAgo, esc, fmtPct, fmtPrice, h, paginate, pctClass, toast } from '../util.js';
@@ -57,15 +58,6 @@ export async function renderScreenView(view) {
     if (start > end) { toast('开始日期不能晚于结束日期', true); return; }
     ev.target.disabled = true;
     ev.target.textContent = '选股中…';
-    const prog = document.getElementById('sc-progress');
-    prog.innerHTML = `
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:8px">
-          <span id="pg-label">提交任务…</span><span class="muted mono" id="pg-count"></span>
-        </div>
-        <div class="progress"><div id="pg-bar" style="width:0%"></div></div>
-        <div class="muted" style="font-size:12px;margin-top:6px">正在按区间扫描K线并评估入场条件</div>
-      </div>`;
     try {
       const uniVal = document.getElementById('sc-universe').value;
       const payload = { strategy_id: sid, start, end };
@@ -75,23 +67,9 @@ export async function renderScreenView(view) {
         if (utype === 'board') payload.universe = { type: 'board', board: ucode };
         else payload.universe = { type: utype, code: ucode };
       }
-      const { job_id } = await api.screen(payload);
-      const result = await pollJob(job_id, (job) => {
-        const p = job.progress || { done: 0, total: 0 };
-        const lbl = document.getElementById('pg-label');
-        const cnt = document.getElementById('pg-count');
-        const bar = document.getElementById('pg-bar');
-        if (!lbl) return; // 界面已切换，跳过进度更新（任务仍继续轮询）
-        lbl.textContent = `扫描 ${p.current || ''}`;
-        if (cnt) cnt.textContent = p.total ? `${p.done}/${p.total}` : '';
-        if (bar) bar.style.width = p.total ? `${Math.round((p.done / p.total) * 100)}%` : '0%';
-      }, 1000);
-      state.lastScreenResult = result;
-      state.screenPicks = []; // 新结果重置勾选
-      const resultsEl = document.getElementById('sc-results');
-      if (resultsEl) { prog.innerHTML = ''; renderResults(resultsEl, result); }
+      // 全局任务：后台轮询，切页不中断；完成后 state.lastScreenResult 更新 + 自动刷新
+      await runJob('screen', () => api.screen(payload));
     } catch (e) {
-      if (prog) prog.innerHTML = '';
       toast(`选股失败：${e.message}`, true);
     } finally {
       ev.target.disabled = false;
@@ -99,7 +77,26 @@ export async function renderScreenView(view) {
     }
   };
 
-  if (state.lastScreenResult) renderResults(document.getElementById('sc-results'), state.lastScreenResult, true);
+  // 恢复：running 任务显示进度条（后台继续），done 显示结果
+  const job = getActiveJob('screen');
+  if (job && job.status === 'running') {
+    renderProgress(document.getElementById('sc-progress'), job);
+  } else if (state.lastScreenResult) {
+    renderResults(document.getElementById('sc-results'), state.lastScreenResult, true);
+  }
+}
+
+function renderProgress(el, job) {
+  const p = job.progress || { done: 0, total: 0, current: '' };
+  const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+  el.innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:8px">
+        <span>扫描 ${esc(p.current || '')}</span><span class="muted mono">${p.total ? `${p.done}/${p.total}` : ''}</span>
+      </div>
+      <div class="progress"><div style="width:${pct}%"></div></div>
+      <div class="muted" style="font-size:12px;margin-top:6px">正在按区间扫描K线并评估入场条件（切页后后台继续）</div>
+    </div>`;
 }
 
 function picked(code) {

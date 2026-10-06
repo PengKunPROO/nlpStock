@@ -1,6 +1,7 @@
 // Router + tab bar + view mounting
 import { api } from './api.js';
 import state, { ensureSettings } from './store.js';
+import { setJobsChangeHandler } from './jobs.js';
 import { toast } from './util.js';
 import { renderStrategyView } from './views/strategy.js';
 import { renderScreenView } from './views/screen.js';
@@ -57,12 +58,29 @@ const routes = {
   settings: renderSettingsView,
 };
 
-async function render() {
+// 全局后台任务指示器：5 个 Tab 顶部都显示 running 中的任务
+function updateJobIndicator() {
+  const el = document.getElementById('job-indicator');
+  if (!el) return;
+  const running = [];
+  if (state.activeScreenJob && state.activeScreenJob.status === 'running') running.push({ label: '选股', job: state.activeScreenJob });
+  if (state.activeBacktestJob && state.activeBacktestJob.status === 'running') running.push({ label: '回测', job: state.activeBacktestJob });
+  if (!running.length) { el.innerHTML = ''; el.classList.remove('show'); return; }
+  el.classList.add('show');
+  el.innerHTML = running.map(({ label, job }) => {
+    const p = job.progress || { done: 0, total: 0 };
+    const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+    return `<div class="job-chip"><span class="dot"></span>${label}中 ${p.total ? `${p.done}/${p.total} · ` : ''}${pct}%</div>`;
+  }).join('');
+}
+
+async function render(silent = false) {
   setActive();
+  updateJobIndicator();
   const tab = currentTab();
   const view = document.getElementById('view');
   view.classList.remove('chat-mode');
-  view.innerHTML = '<div class="spinner"></div>';
+  if (!silent) view.innerHTML = '<div class="spinner"></div>';
   try {
     await ensureSettings(api);
     await routes[tab](view);
@@ -70,6 +88,14 @@ async function render() {
     view.innerHTML = `<div class="card"><div class="empty"><p>加载失败：${e.message || e}</p><p style="margin-top:12px"><button class="btn sm secondary" onclick="location.reload()">重新加载</button></p></div></div>`;
   }
 }
+
+// 后台任务状态变化：更新指示器；若当前 Tab 有对应任务，静默刷新（进度/结果）
+setJobsChangeHandler(() => {
+  const tab = currentTab();
+  const job = tab === 'screen' ? state.activeScreenJob : tab === 'backtest' ? state.activeBacktestJob : null;
+  if (job) render(true); // 静默刷新，不清空（避免进度条闪烁）
+  else updateJobIndicator();
+});
 
 document.getElementById('view').addEventListener('rerender', () => render());
 
