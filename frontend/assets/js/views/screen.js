@@ -30,10 +30,12 @@ export async function renderScreenView(view) {
         <label>股票池（覆盖策略默认）</label>
         <select id="sc-universe">
           <option value="">跟随策略默认</option>
-          <option value="index:000300.SH">沪深300</option>
-          <option value="index:000905.SH">中证500</option>
-          <option value="index:399006.SZ">创业板指</option>
-          <option value="index:000016.SH">上证50</option>
+          <option value="index:000300.SH">沪深300（300只）</option>
+          <option value="index:000905.SH">中证500（500只）</option>
+          <option value="index:399006.SZ">创业板指（100只成分股）</option>
+          <option value="index:000016.SH">上证50（50只）</option>
+          <option value="board:创业板">创业板（全部股票）</option>
+          <option value="board:科创板">科创板（全部股票）</option>
           <option value="all">全市场</option>
         </select>
       </div>
@@ -68,7 +70,11 @@ export async function renderScreenView(view) {
       const uniVal = document.getElementById('sc-universe').value;
       const payload = { strategy_id: sid, start, end };
       if (uniVal === 'all') payload.universe = { type: 'all' };
-      else if (uniVal) { const [utype, ucode] = uniVal.split(':'); payload.universe = { type: utype, code: ucode }; }
+      else if (uniVal) {
+        const [utype, ucode] = uniVal.split(':');
+        if (utype === 'board') payload.universe = { type: 'board', board: ucode };
+        else payload.universe = { type: utype, code: ucode };
+      }
       const { job_id } = await api.screen(payload);
       const result = await pollJob(job_id, (job) => {
         const p = job.progress || { done: 0, total: 0 };

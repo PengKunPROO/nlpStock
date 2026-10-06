@@ -24,8 +24,6 @@ export function renderKline(canvas, bars, opts = {}) {
   const markerPts = []; // 每次 draw 重算的屏幕坐标，供命中检测用
 
   const shownMas = Object.keys(MA_STYLE).filter((k) => opts[k] !== false);
-  // 十字光标（拖动跟随）：{ idx(可见), y }
-  let crosshair = null;
 
   const padL = 6, padR = 52, padT = 8, padB = 18, gap = 10;
   // 布局几何（draw 时更新，交互读取）
@@ -174,24 +172,8 @@ export function renderKline(canvas, bars, opts = {}) {
     ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.font = '600 10px -apple-system, sans-serif';
     ctx.fillText(fmt(last.close), padL + plotW + 1 + (padR - 3) / 2, yLast + 3.5);
 
-    // 十字光标（拖动跟随）：垂直线 + 水平线 + 顶部日期标签
-    if (crosshair && crosshair.idx >= 0 && crosshair.idx < n) {
-      const x = padL + crosshair.idx * step + step / 2;
-      const b = visible[crosshair.idx];
-      const y = yMain(b.close);
-      ctx.strokeStyle = cText3; ctx.globalAlpha = 0.6; ctx.setLineDash([3, 3]); ctx.lineWidth = 0.5;
-      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + mainH + gap + volH); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
-      ctx.setLineDash([]); ctx.globalAlpha = 1;
-      ctx.fillStyle = cText3; ctx.textAlign = 'center'; ctx.font = '600 11px -apple-system, sans-serif';
-      const label = (b.date || '').slice(5);
-      const lw = ctx.measureText(label).width + 12;
-      const lx = Math.min(Math.max(padL, x - lw / 2), padL + plotW - lw);
-      roundRect(ctx, lx, padT + 1, lw, 16, 3);
-      ctx.fillStyle = cText3; ctx.fill();
-      ctx.fillStyle = '#fff'; ctx.fillText(label, lx + lw / 2, padT + 13);
-    } else if (highlightIdx !== undefined) {
-      // 点击高亮虚线
+    // 点击高亮虚线
+    if (highlightIdx !== undefined) {
       const x = padL + highlightIdx * step + step / 2;
       ctx.strokeStyle = cText3; ctx.globalAlpha = 0.5; ctx.setLineDash([3, 3]);
       ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + mainH + gap + volH); ctx.stroke();
@@ -201,7 +183,7 @@ export function renderKline(canvas, bars, opts = {}) {
 
   draw();
 
-  // pointer interaction：拖动平移 + 十字光标；点击（位移小）命中 marker/bar
+  // pointer interaction：拖动平移（纯平移）；点击（位移小）命中 marker/bar
   const toIdx = (evX, evY) => {
     const rect = canvas.getBoundingClientRect();
     const x = evX - rect.left - padL;
@@ -209,7 +191,6 @@ export function renderKline(canvas, bars, opts = {}) {
     if (x < 0 || x > plotW || y < padT || y > bodyBottom) return null;
     return Math.max(0, Math.min(visibleCount - 1, Math.floor(x / step)));
   };
-  const barAtGlobalIdx = (vidx) => (vidx === null || vidx < 0 || offset + vidx >= total ? null : bars[offset + vidx]);
 
   let dragStartX = null, dragStartOffset = 0, moved = false;
   const onPointerDown = (ev) => {
@@ -228,34 +209,26 @@ export function renderKline(canvas, bars, opts = {}) {
       draw();
       return;
     }
-    // 开始拖动 + 十字光标
+    // 开始拖动（纯平移，不显示十字光标/浮层）
     dragStartX = ev.clientX;
     dragStartOffset = offset;
     moved = false;
-    const vidx = toIdx(ev.clientX, ev.clientY);
-    crosshair = { idx: vidx === null ? -1 : vidx };
-    if (opts.onCrosshair) opts.onCrosshair(barAtGlobalIdx(vidx), pos, rect.width);
     canvas.setPointerCapture(ev.pointerId);
-    draw();
   };
   const onPointerMove = (ev) => {
     if (dragStartX === null) return;
-    const rect = canvas.getBoundingClientRect();
-    const pos = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
     const dx = ev.clientX - dragStartX;
     if (Math.abs(dx) > 6) moved = true;
+    if (!moved) return; // 未达拖动阈值：等待（松手视为点击）
     const delta = Math.round(dx / step);
     if (delta !== 0) {
       const newOffset = Math.max(0, Math.min(total - visibleCount, dragStartOffset - delta));
       if (newOffset !== offset) {
         offset = newOffset;
         if (opts.onOffsetChange) opts.onOffsetChange(offset);
+        draw();
       }
     }
-    const vidx = toIdx(ev.clientX, ev.clientY);
-    crosshair = { idx: vidx === null ? -1 : vidx };
-    if (opts.onCrosshair) opts.onCrosshair(barAtGlobalIdx(vidx), pos, rect.width);
-    draw();
   };
   const onPointerUp = (ev) => {
     if (dragStartX === null) return;
@@ -263,10 +236,8 @@ export function renderKline(canvas, bars, opts = {}) {
     const pos = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
     dragStartX = null;
     if (!moved) {
-      // 位移小 → 视为点击
+      // 位移小 → 视为点击（显示浮层）
       const vidx = toIdx(ev.clientX, ev.clientY);
-      crosshair = null;
-      if (opts.onCrosshair) opts.onCrosshair(null, pos, rect.width);
       if (vidx === null) {
         if (highlightIdx !== undefined) { highlightIdx = undefined; draw(); }
         if (opts.onBlankTap) opts.onBlankTap(pos, rect.width);
@@ -277,10 +248,7 @@ export function renderKline(canvas, bars, opts = {}) {
       draw();
       return;
     }
-    // 拖动结束：隐藏十字光标
-    crosshair = null;
-    if (opts.onCrosshair) opts.onCrosshair(null, pos, rect.width);
-    draw();
+    // 拖动结束：纯平移，无后续动作
   };
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);

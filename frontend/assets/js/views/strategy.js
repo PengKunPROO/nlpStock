@@ -348,6 +348,7 @@ function collectForm(cfg, type) {
     if (t) {
       if (t.value === 'custom') cfg.universe = { type: 'custom', codes: (document.getElementById('f-uni-codes').value.match(/[0-9A-Z]+\.(SH|SZ|BJ|TI)/g)) || [] };
       else if (t.value === 'all') cfg.universe = { type: 'all' };
+      else if (t.value === 'board') cfg.universe = { type: 'board', board: document.getElementById('f-uni-board').value };
       else cfg.universe = { type: t.value, code: document.getElementById('f-uni-code').value };
     }
   } else {
@@ -406,6 +407,7 @@ function universeCard(cfg) {
       <select id="f-uni-type">
         <option value="index" ${u.type === 'index' ? 'selected' : ''}>指数成分（如沪深300）</option>
         <option value="sector" ${u.type === 'sector' ? 'selected' : ''}>行业板块成分</option>
+        <option value="board" ${u.type === 'board' ? 'selected' : ''}>上市板块（创业板/科创板）</option>
         <option value="custom" ${u.type === 'custom' ? 'selected' : ''}>自选</option>
         <option value="all" ${u.type === 'all' ? 'selected' : ''}>全市场（首次较慢）</option>
       </select>
@@ -413,16 +415,24 @@ function universeCard(cfg) {
     <div class="field" id="f-uni-code-wrap"><label>范围</label>
       <input id="f-uni-code" type="text" value="${esc(u.code || '000300.SH')}" placeholder="000300.SH">
     </div>
+    <div class="field" id="f-uni-board-wrap" style="display:none"><label>上市板块</label>
+      <select id="f-uni-board">
+        <option value="创业板" ${u.board === '创业板' ? 'selected' : ''}>创业板（全部股票）</option>
+        <option value="科创板" ${u.board === '科创板' ? 'selected' : ''}>科创板（全部股票）</option>
+      </select>
+    </div>
     <div class="field" id="f-uni-codes-wrap" style="display:none"><label>自选代码（逗号分隔）</label>
       <input id="f-uni-codes" type="text" value="${esc((u.codes || []).join(','))}" placeholder="600519.SH,000001.SZ">
     </div>
   </div>`);
   const typeSel = card.querySelector('#f-uni-type');
   const codeWrap = card.querySelector('#f-uni-code-wrap');
+  const boardWrap = card.querySelector('#f-uni-board-wrap');
   const codesWrap = card.querySelector('#f-uni-codes-wrap');
   const sync = () => {
     const t = typeSel.value;
     codeWrap.style.display = t === 'index' || t === 'sector' ? '' : 'none';
+    boardWrap.style.display = t === 'board' ? '' : 'none';
     codesWrap.style.display = t === 'custom' ? '' : 'none';
   };
   typeSel.onchange = sync;

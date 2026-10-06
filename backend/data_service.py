@@ -169,6 +169,13 @@ class DataService:
             codes = list(universe.get("codes", []))
             names = {c: (self.name_for(c) or c) for c in codes}
             return codes, names, "自选"
+        if utype == "board":
+            board = universe.get("board")
+            prefixes = {"创业板": ("300", "301", "302"), "科创板": ("688", "689")}
+            ps = prefixes.get(board, ())
+            self._ensure_tickers()
+            items = [i for i in self.storage.all_tickers("a-share") if i["thscode"][:3] in ps]
+            return [i["thscode"] for i in items], {i["thscode"]: i["name"] for i in items}, board
         self._ensure_tickers()
         items = self.storage.all_tickers("a-share")
         return [i["thscode"] for i in items], {i["thscode"]: i["name"] for i in items}, "全市场"

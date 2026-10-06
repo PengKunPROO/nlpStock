@@ -161,9 +161,10 @@ class Rule(BaseModel):
 
 
 class Universe(BaseModel):
-    type: Literal["index", "sector", "custom", "all"]
+    type: Literal["index", "sector", "custom", "all", "board"]
     code: Union[str, None] = None
     codes: Union[list[str], None] = None
+    board: Union[str, None] = None  # "创业板" | "科创板"（上市板块，按代码前缀筛全市场）
 
     @root_validator(skip_on_failure=True)
     def _check(cls, values):  # noqa: N805
@@ -176,6 +177,9 @@ class Universe(BaseModel):
             for c in values["codes"]:
                 if not _THSCODE_RE.match(c):
                     raise ValueError(f"invalid thscode: {c}")
+        elif values.get("type") == "board":
+            if values.get("board") not in ("创业板", "科创板"):
+                raise ValueError("universe type board requires board in (创业板, 科创板)")
         return values
 
 

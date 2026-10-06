@@ -228,6 +228,7 @@ textarea { resize: vertical; min-height: 90px; line-height: 1.45; }
   border: 0.5px solid var(--sep); border-radius: 12px; padding: 10px 12px; font-size: 12px; z-index: 5;
   min-width: 168px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); line-height: 1.7; pointer-events: none;
 }
+.kline-tip .link, .kline-tip button { pointer-events: auto; cursor: pointer; }
 .kline-tip .t-row { display: flex; justify-content: space-between; gap: 14px; }
 .kline-tip .t-row span:first-child { color: var(--text-3); }
 canvas.kline, canvas.equity { width: 100%; display: block; touch-action: none; }
