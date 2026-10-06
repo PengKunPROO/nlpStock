@@ -212,6 +212,7 @@ export function renderKline(canvas, bars, opts = {}) {
 
   let dragStartX = null, dragStartOffset = 0, moved = false;
   const onPointerDown = (ev) => {
+    ev.preventDefault(); // 阻止浏览器默认触摸行为（页面滚动/缩放）
     const rect = canvas.getBoundingClientRect();
     const pos = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
     // 买卖点 marker 命中优先（点击查看详情）
@@ -239,6 +240,7 @@ export function renderKline(canvas, bars, opts = {}) {
   };
   const onPointerMove = (ev) => {
     if (dragStartX === null) return;
+    ev.preventDefault(); // 阻止滚动（滑多了也不会让整个图跟着页面动）
     const rect = canvas.getBoundingClientRect();
     const pos = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
     const dx = ev.clientX - dragStartX;
