@@ -112,7 +112,7 @@ export function refreshBacktestProgress() {
   if (job && job.status === 'running' && el) renderProgress(el, job);
 }
 
-// 回测池卡片：chips（可删除）+ 空态（提示去选股页勾选 + 跳转按钮）
+// 回测池卡片：chips（可删除）+ 空态（提示去选股页勾选 + 从自选股添加）
 function renderPoolCard(el) {
   const pool = state.screenPicks || [];
   el.innerHTML = `
@@ -120,19 +120,23 @@ function renderPoolCard(el) {
       <b style="font-size:15px">回测池 <span class="chip accent" id="bt-pool-count">${pool.length}</span></b>
       <span class="muted" style="font-size:12px">${pool.length ? '每票独立账户回测，不轮动' : ''}</span>
     </div>
-    ${pool.length ? `<div style="display:flex;flex-wrap:wrap;gap:8px">
+    ${pool.length ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
       ${pool.map((pk, i) => `<span class="chip" style="display:inline-flex;align-items:center;gap:6px;padding:7px 10px">
         <b>${esc(pk.name)}</b>
         <span class="muted" style="font-size:11px">${esc(pk.thscode)}${pk.signal_date ? ' · 信号 ' + esc(pk.signal_date) : ''}</span>
         <button class="bt-pick-x" data-i="${i}" aria-label="移除 ${esc(pk.name)}" style="border:none;background:none;cursor:pointer;font-size:15px;line-height:1;padding:0 2px;color:var(--muted)">✕</button>
       </span>`).join('')}
-    </div>` : `<div class="empty" style="padding:16px 0">
-        回测池为空，请先去选股页勾选。<br>
+    </div>
+    <button class="btn sm secondary" id="bt-add-watch" style="margin-bottom:6px">＋ 从自选股添加</button>` : `<div class="empty" style="padding:16px 0">
+        回测池为空。可从选股结果勾选，或从自选股添加。<br>
         <button class="btn sm secondary" id="bt-go-screen" style="margin-top:12px">去选股页勾选</button>
+        <button class="btn sm secondary" id="bt-add-watch" style="margin-top:8px">＋ 从自选股添加</button>
       </div>`}
   `;
   const go = el.querySelector('#bt-go-screen');
   if (go) go.onclick = () => { location.hash = '#/screen'; };
+  const addWatch = el.querySelector('#bt-add-watch');
+  if (addWatch) addWatch.onclick = () => openWatchlistPicker(el);
   el.querySelectorAll('.bt-pick-x').forEach((x) => {
     x.onclick = () => {
       state.screenPicks.splice(Number(x.dataset.i), 1);
@@ -141,6 +145,56 @@ function renderPoolCard(el) {
       if (run) run.disabled = !state.screenPicks.length;
     };
   });
+}
+
+// 自选股选择器：从自选股分组勾选加入回测池（无 signal_date，回测用交易策略 entry 入场）
+function openWatchlistPicker(el) {
+  api.watchlistGroups().then(({ items: groups }) => {
+    if (!groups.length) {
+      toast('还没有自选股分组，请先到「自选」页创建', true);
+      return;
+    }
+    const overlay = h(`<div id="wl-picker" class="replay-overlay">
+      <div class="replay-head">
+        <b style="font-size:16px">从自选股添加</b>
+        <button class="btn sm secondary" id="wl-picker-close">关闭</button>
+      </div>
+      <div class="card" id="wl-picker-body"></div>
+    </div>`);
+    document.body.appendChild(overlay);
+    overlay.querySelector('#wl-picker-close').onclick = () => overlay.remove();
+    overlay.addEventListener('pointerdown', (e) => { if (e.target === overlay) overlay.remove(); });
+    let gid = groups[0].id;
+    const body = overlay.querySelector('#wl-picker-body');
+    const renderBody = () => {
+      body.innerHTML = `<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:8px;margin-bottom:10px">
+        ${groups.map((g) => `<button class="seg-btn ${g.id === gid ? 'active' : ''}" data-gid="${g.id}">${esc(g.name)}</button>`).join('')}
+      </div><div id="wl-picker-items"></div>`;
+      body.querySelectorAll('[data-gid]').forEach((b) => b.onclick = () => { gid = Number(b.dataset.gid); renderBody(); });
+      api.watchlistItems(gid).then(({ items }) => {
+        const listEl = body.querySelector('#wl-picker-items');
+        listEl.innerHTML = '';
+        if (!items.length) { listEl.innerHTML = '<div class="empty" style="padding:16px 0">该分组无股票，请到「自选」页添加</div>'; return; }
+        for (const it of items) {
+          const added = state.screenPicks.some((p) => p.thscode === it.thscode);
+          const row = h(`<div class="card" style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;cursor:pointer">
+            <div><b>${esc(it.name)}</b> <span class="muted" style="font-size:12px">${esc(it.thscode)}</span></div>
+            <span class="chip ${added ? 'accent' : ''}">${added ? '已加入' : '＋添加'}</span>
+          </div>`);
+          row.onclick = () => {
+            if (!added) state.screenPicks.push({ thscode: it.thscode, name: it.name, signal_date: null });
+            else state.screenPicks = state.screenPicks.filter((p) => p.thscode !== it.thscode);
+            renderBody();
+            renderPoolCard(el);
+            const run = document.getElementById('bt-run');
+            if (run) run.disabled = !state.screenPicks.length;
+          };
+          listEl.appendChild(row);
+        }
+      }).catch((e) => { body.querySelector('#wl-picker-items').innerHTML = `<div class="empty">加载失败：${esc(e.message)}</div>`; });
+    };
+    renderBody();
+  }).catch((e) => toast(`加载自选股失败：${e.message}`, true));
 }
 
 function evHtml(ev) {

@@ -316,13 +316,14 @@ class ScreeningStrategy(BaseModel):
 
 
 class TradingStrategy(BaseModel):
-    """交易策略：持仓管理规则，入场由选股策略负责；buy 规则仅用于补仓（必须引用持仓字段）。"""
+    """交易策略：可选入场条件 entry + 持仓管理规则 rules + 风控 risk；buy 规则仅用于补仓（必须引用持仓字段）。"""
 
     name: str
     description: str = ""
     source_text: str = ""
     parse_engine: str = "llm"
     indicators: conlist(IndicatorSpec, min_items=1, max_items=30)  # type: ignore[valid-type]
+    entry: Union[ConditionGroup, None] = None  # 可选入场条件：自己指定股票（无 signal_date）时决定买入时机
     rules: conlist(Rule, min_items=1)  # type: ignore[valid-type]
     risk: RiskConfig = RiskConfig()
     backtest_defaults: BacktestDefaults
@@ -336,8 +337,16 @@ class TradingStrategy(BaseModel):
     def _check(cls, values):  # noqa: N805
         indicators = values.get("indicators") or []
         rules = values.get("rules") or []
-        _check_indicator_refs(indicators, [r.when for r in rules])
+        entry = values.get("entry")
+        groups = [r.when for r in rules]
+        if entry is not None:
+            groups.append(entry)
+        _check_indicator_refs(indicators, groups)
         for rule in rules:
             if rule.action == "buy" and not any(_references_hold_field(c) for c in _walk_leaves(rule.when)):
                 raise ValueError("buy rule must reference a hold field (cost/pnl_pct/hold_days/dd_from_peak)")
+        if entry is not None:
+            for cond in _walk_leaves(entry):
+                if _references_hold_field(cond):
+                    raise ValueError("trading entry must not reference hold fields (cost/pnl_pct/hold_days/dd_from_peak)")
         return values

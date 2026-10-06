@@ -50,6 +50,15 @@ export const api = {
     request('GET', `/api/kline?thscode=${encodeURIComponent(thscode)}&period=${period}&count=${count}`),
   search: (q, limit = 20) => request('GET', `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`),
   universeOptions: () => request('GET', '/api/universe/options'),
+
+  // 自选股分组 + 股票
+  watchlistGroups: () => request('GET', '/api/watchlist/groups'),
+  createWatchlistGroup: (name) => request('POST', '/api/watchlist/groups', { name }),
+  renameWatchlistGroup: (gid, name) => request('PUT', `/api/watchlist/groups/${gid}`, { name }),
+  deleteWatchlistGroup: (gid) => request('DELETE', `/api/watchlist/groups/${gid}`),
+  watchlistItems: (gid) => request('GET', `/api/watchlist/groups/${gid}/items`),
+  addWatchlistItem: (group_id, thscode, name) => request('POST', '/api/watchlist/items', { group_id, thscode, name }),
+  deleteWatchlistItem: (iid) => request('DELETE', `/api/watchlist/items/${iid}`),
 };
 
 export async function pollJob(jobId, onProgress, intervalMs = 1000, timeoutMs = 20 * 60 * 1000) {

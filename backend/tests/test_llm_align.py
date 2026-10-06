@@ -156,7 +156,8 @@ def test_trading_config_validates_and_fills_source():
     assert cfg["source_text"] == USER_MSG[0]["content"]
     assert cfg["parse_engine"] == "llm"
     assert len(cfg["rules"]) == 3
-    assert "entry" not in cfg and "universe" not in cfg
+    assert "universe" not in cfg
+    assert cfg.get("entry") is None  # 可选入场条件，未描述时为 None
     assert cfg["risk"]["stop_loss_pct"] == 8.0
     TradingStrategy.parse_obj(cfg)
 

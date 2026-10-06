@@ -290,6 +290,10 @@ function buildForm(cfg, type) {
     wrap.appendChild(entryCard(cfg));
   } else {
     indicatorsSection();
+    // 入场条件（可选）：自己指定股票回测时决定何时买入
+    if (!cfg.entry) cfg.entry = { logic: 'all', conditions: [] };
+    wrap.appendChild(h(`<div class="section-title">入场条件（可选：自己指定股票回测时决定何时买入，从选股池回测可留空）</div>`));
+    wrap.appendChild(entryCard(cfg));
     wrap.appendChild(h(`<div class="section-title">交易规则（${(cfg.rules || []).length} 条）</div>`));
     wrap.appendChild(ruleCard(cfg));
 
@@ -352,10 +356,13 @@ function collectForm(cfg, type) {
       else cfg.universe = { type: t.value, code: document.getElementById('f-uni-code').value };
     }
   } else {
-    // 交易策略：{name, indicators, rules, risk, backtest_defaults}
-    delete cfg.entry;
+    // 交易策略：{name, indicators, entry(可选), rules, risk, backtest_defaults}
     delete cfg.exit;
     delete cfg.universe;
+    // entry 可选：无任何条件则删除（=None，从选股池回测）
+    if (cfg.entry && !(cfg.entry.conditions || []).length) {
+      delete cfg.entry;
+    }
     if (cfg.risk) {
       cfg.risk.stop_loss_pct = num('f-stop') ?? null;
       cfg.risk.trailing_stop_pct = num('f-trail') ?? null;

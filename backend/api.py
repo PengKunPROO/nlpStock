@@ -51,6 +51,16 @@ class SettingsUpdate(BaseModel):
     default_universe: Optional[dict] = None
 
 
+class WatchlistGroupBody(BaseModel):
+    name: str
+
+
+class WatchlistItemBody(BaseModel):
+    group_id: int
+    thscode: str
+    name: str
+
+
 class ParseRequest(BaseModel):
     messages: conlist(dict, min_items=1)  # type: ignore[valid-type]
     strategy_type: str = "screening"  # "screening"（选股策略）| "trading"（交易策略），UI 按 Tab 区分
@@ -371,3 +381,43 @@ def register_routes(app: FastAPI, core: Core) -> None:
             return core.data.universe_options()
         except FuyaoError as e:
             raise ApiError(502, "upstream_error", f"数据源错误: {e.message}") from e
+
+    # ---- 自选股分组 + 股票 ----
+
+    @app.get("/api/watchlist/groups")
+    def watchlist_groups():
+        return {"items": core.storage.list_watchlist_groups()}
+
+    @app.post("/api/watchlist/groups")
+    def watchlist_group_create(body: WatchlistGroupBody):
+        name = body.name.strip()
+        if not name:
+            raise ApiError(400, "bad_request", "分组名不能为空")
+        return {"id": core.storage.create_watchlist_group(name)}
+
+    @app.put("/api/watchlist/groups/{gid}")
+    def watchlist_group_rename(gid: int, body: WatchlistGroupBody):
+        if not core.storage.rename_watchlist_group(gid, body.name.strip()):
+            raise ApiError(404, "not_found", "分组不存在")
+        return {"ok": True}
+
+    @app.delete("/api/watchlist/groups/{gid}")
+    def watchlist_group_delete(gid: int):
+        if not core.storage.delete_watchlist_group(gid):
+            raise ApiError(404, "not_found", "分组不存在")
+        return {"ok": True}
+
+    @app.get("/api/watchlist/groups/{gid}/items")
+    def watchlist_items(gid: int):
+        return {"items": core.storage.list_watchlist_items(gid)}
+
+    @app.post("/api/watchlist/items")
+    def watchlist_item_add(body: WatchlistItemBody):
+        ok = core.storage.add_watchlist_item(body.group_id, body.thscode, body.name)
+        return {"ok": ok}
+
+    @app.delete("/api/watchlist/items/{iid}")
+    def watchlist_item_delete(iid: int):
+        if not core.storage.delete_watchlist_item(iid):
+            raise ApiError(404, "not_found", "自选股不存在")
+        return {"ok": True}

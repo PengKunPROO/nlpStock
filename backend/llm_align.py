@@ -93,14 +93,15 @@ _SCREENING_OUTPUT = """config 输出字段（ScreeningStrategy，选股策略—
 - entry：入场条件 ConditionGroup（非空）。这是纯选股筛选，不引用持仓状态字段（pnl_pct/hold_days/dd_from_peak/cost）——选股时尚未持仓，引用它们恒不成立
 - 不要输出 rules/risk/backtest_defaults 字段（那些属于交易策略）"""
 
-_TRADING_OUTPUT = """config 输出字段（TradingStrategy，交易策略——只负责"持仓后怎么办"，入场由选股策略负责）：
+_TRADING_OUTPUT = """config 输出字段（TradingStrategy，交易策略——可选入场 entry + 持仓管理）：
 - name：策略名（1-40字符）
 - description：一句话说明策略思路
-- indicators：1-30个指标（见指标目录），rules 中用到的指标必须先声明
+- indicators：1-30个指标（见指标目录），entry/rules 中用到的指标必须先声明
+- entry：可选入场条件 ConditionGroup（见条件模型）。仅在用户明确描述了"何时买入/进场"时填写（如"突破20日线买"→close>ma20、"MACD金叉买"→dif>dea 且昨日 dif<=dea、"回踩不破买"→close>=box20 等）；用户只说持仓管理（补仓/减仓/止损）就不填，保持 null。entry 不可引用持仓状态字段（未持仓时无意义）
 - rules：1条以上持仓管理规则（见规则模型）。action=buy 仅用于补仓/加仓，其 when 必须引用持仓状态字段（如 pnl_pct<=-5、hold_days>=3）；action=sell 用于卖出/减仓（引用价格/指标或持仓字段均可）
 - risk：{"stop_loss_pct":null,"trailing_stop_pct":null,"max_hold_days":null,"take_profit_pct":null}（null=禁用；仅在用户明确提到对应风控时才填值，禁止默认填）
 - backtest_defaults：{"start":"2025-01-01","end":"<今天>","initial_cash":1000000,"position_pct":20,"max_positions":5,"fee_bps":2.5,"stamp_tax_bps":5.0}
-- 不要输出 entry/universe 字段（那些属于选股策略）"""
+- 不要输出 universe 字段（那属于选股策略）"""
 
 _SCREENING_PROTOCOL = """输出协议（严格遵守）：
 每次只输出一个 JSON 对象，两种形态二选一：

@@ -126,6 +126,13 @@ textarea { resize: vertical; min-height: 90px; line-height: 1.45; }
 }
 .seg button.active { background: var(--card); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
 
+/* 横向滚动的分组 tab（自选股分组等） */
+.seg-btn {
+  padding: 7px 14px; border: 0.5px solid var(--sep); border-radius: 16px; background: var(--card-2);
+  color: var(--text-2); font-size: 13px; cursor: pointer; white-space: nowrap; flex-shrink: 0; font-family: inherit;
+}
+.seg-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+
 /* chips & badges */
 .chip {
   display: inline-flex; align-items: center; gap: 4px; background: var(--chip-bg); color: var(--text-2);

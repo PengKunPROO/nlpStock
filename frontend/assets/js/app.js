@@ -7,6 +7,7 @@ import { renderStrategyView } from './views/strategy.js';
 import { renderScreenView, refreshScreenProgress } from './views/screen.js';
 import { renderBacktestView, refreshBacktestProgress } from './views/backtest.js';
 import { renderChartView } from './views/chart.js';
+import { renderWatchlistView } from './views/watchlist.js';
 import { renderSettingsView } from './views/settings.js';
 
 const TABS = [
@@ -14,6 +15,7 @@ const TABS = [
   { id: 'screen', label: '选股', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>' },
   { id: 'backtest', label: '回测', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="M4 16l5-6 4 3 6-8"/></svg>' },
   { id: 'chart', label: '图表', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6v12M8 6l-3 3M8 6l3 3"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg>' },
+  { id: 'watchlist', label: '自选', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>' },
   { id: 'settings', label: '设置', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h.09a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z"/></svg>' },
 ];
 
@@ -22,6 +24,7 @@ const TITLES = {
   screen: ['选股', '按策略扫描股票池'],
   backtest: ['回测', '胜率 · 回撤 · 净值曲线'],
   chart: ['图表', 'K线 · 量能分析'],
+  watchlist: ['自选', '分组 · 自选股'],
   settings: ['设置', '数据源与 AI 配置'],
 };
 
@@ -55,6 +58,7 @@ const routes = {
   screen: renderScreenView,
   backtest: renderBacktestView,
   chart: renderChartView,
+  watchlist: renderWatchlistView,
   settings: renderSettingsView,
 };
 

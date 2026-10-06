@@ -37,6 +37,13 @@ CREATE TABLE IF NOT EXISTS backtest_analyses(
   result_json TEXT,
   created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_klines_code ON klines(thscode);
+CREATE TABLE IF NOT EXISTS watchlist_groups(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS watchlist_items(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL,
+  thscode TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL,
+  UNIQUE(group_id, thscode));
 """
 
 
@@ -426,3 +433,46 @@ class Storage:
         with self._conn() as c:
             row = c.execute("SELECT * FROM backtest_analyses WHERE id=?", (aid,)).fetchone()
         return self._analysis_view(row) if row else None
+
+    # ---- 自选股分组 + 股票 ----
+
+    def list_watchlist_groups(self) -> list[dict]:
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT g.id, g.name, g.sort_order, COUNT(i.id) AS cnt "
+                "FROM watchlist_groups g LEFT JOIN watchlist_items i ON i.group_id = g.id "
+                "GROUP BY g.id ORDER BY g.sort_order, g.id").fetchall()
+        return [{"id": r["id"], "name": r["name"], "count": r["cnt"]} for r in rows]
+
+    def create_watchlist_group(self, name: str) -> int:
+        with self._conn() as c:
+            cur = c.execute("INSERT INTO watchlist_groups(name, created_at) VALUES(?,?)", (name, _now()))
+            return cur.lastrowid
+
+    def rename_watchlist_group(self, gid: int, name: str) -> bool:
+        with self._conn() as c:
+            cur = c.execute("UPDATE watchlist_groups SET name=? WHERE id=?", (name, gid))
+            return cur.rowcount > 0
+
+    def delete_watchlist_group(self, gid: int) -> bool:
+        with self._conn() as c:
+            c.execute("DELETE FROM watchlist_items WHERE group_id=?", (gid,))
+            cur = c.execute("DELETE FROM watchlist_groups WHERE id=?", (gid,))
+            return cur.rowcount > 0
+
+    def list_watchlist_items(self, gid: int) -> list[dict]:
+        with self._conn() as c:
+            rows = c.execute("SELECT id, thscode, name FROM watchlist_items WHERE group_id=? ORDER BY id", (gid,)).fetchall()
+        return [{"id": r["id"], "thscode": r["thscode"], "name": r["name"]} for r in rows]
+
+    def add_watchlist_item(self, gid: int, thscode: str, name: str) -> bool:
+        with self._conn() as c:
+            cur = c.execute(
+                "INSERT OR IGNORE INTO watchlist_items(group_id, thscode, name, created_at) VALUES(?,?,?,?)",
+                (gid, thscode, name, _now()))
+            return cur.rowcount > 0
+
+    def delete_watchlist_item(self, iid: int) -> bool:
+        with self._conn() as c:
+            cur = c.execute("DELETE FROM watchlist_items WHERE id=?", (iid,))
+            return cur.rowcount > 0

@@ -95,6 +95,9 @@
   let nextId = 1;
   const strategies = [];
   const jobs = {};
+  let wlGroups = [];
+  let wlItems = [];
+  let wlNextId = 1;
 
   function makeBars(n, seed) {
     const bars = [];
@@ -492,6 +495,43 @@
           { code: '886042.TI', name: '白酒概念', count: null },
         ],
       };
+    }
+
+    // ---- 自选股 mock ----
+    if (p === '/api/watchlist/groups' && method === 'GET') {
+      return { items: wlGroups.map((g) => ({ id: g.id, name: g.name, count: wlItems.filter((i) => i.group_id === g.id).length })) };
+    }
+    if (p === '/api/watchlist/groups' && method === 'POST') {
+      const g = { id: ++wlNextId, name: body.name };
+      wlGroups.push(g);
+      return { id: g.id };
+    }
+    let wm = p.match(/^\/api\/watchlist\/groups\/(\d+)$/);
+    if (wm && method === 'PUT') {
+      const g = wlGroups.find((x) => x.id === Number(wm[1]));
+      if (!g) throw httpError(404, 'not_found', '分组不存在');
+      g.name = body.name;
+      return { ok: true };
+    }
+    if (wm && method === 'DELETE') {
+      const gid = Number(wm[1]);
+      wlGroups = wlGroups.filter((x) => x.id !== gid);
+      wlItems = wlItems.filter((x) => x.group_id !== gid);
+      return { ok: true };
+    }
+    wm = p.match(/^\/api\/watchlist\/groups\/(\d+)\/items$/);
+    if (wm && method === 'GET') {
+      return { items: wlItems.filter((i) => i.group_id === Number(wm[1])).map((i) => ({ id: i.id, thscode: i.thscode, name: i.name })) };
+    }
+    if (p === '/api/watchlist/items' && method === 'POST') {
+      const exist = wlItems.find((i) => i.group_id === body.group_id && i.thscode === body.thscode);
+      if (!exist) wlItems.push({ id: ++wlNextId, group_id: body.group_id, thscode: body.thscode, name: body.name });
+      return { ok: true };
+    }
+    wm = p.match(/^\/api\/watchlist\/items\/(\d+)$/);
+    if (wm && method === 'DELETE') {
+      wlItems = wlItems.filter((i) => i.id !== Number(wm[1]));
+      return { ok: true };
     }
     throw httpError(404, 'not_found', 'mock 未实现: ' + method + ' ' + path);
   };

@@ -405,10 +405,11 @@ def backtest_pool(
         bars = data.get_bars_range(code, kind, start_ms, end_ms)
         if len(bars) < 40:
             return None
-        # 找 signal_date 对应的 bar 索引
-        sig_ms = parse_as_of(signal_date) if signal_date else None
+        series = compute_indicators(bars, strategy.indicators)
         sig_idx = None
-        if sig_ms is not None:
+        if signal_date:
+            # 从选股池来：找 signal_date 对应的 bar 索引
+            sig_ms = parse_as_of(signal_date)
             for i, b in enumerate(bars):
                 if b["date_ms"] == sig_ms:
                     sig_idx = i
@@ -418,9 +419,14 @@ def backtest_pool(
                     if b["date_ms"] >= sig_ms:
                         sig_idx = i
                         break
+        elif strategy.entry is not None:
+            # 指定股票（无 signal_date）：扫描交易策略 entry，取首次满足的日期
+            for i in range(len(bars)):
+                if signal_at(strategy.entry, series, i):
+                    sig_idx = i
+                    break
         if sig_idx is None or sig_idx + 1 >= len(bars):
             return None
-        series = compute_indicators(bars, strategy.indicators)
         return _run_one_stock(
             strategy, code, name, bars, series, sig_idx,
             initial_cash, position_pct, fee_rate, tax_rate,
