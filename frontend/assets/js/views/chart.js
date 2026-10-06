@@ -33,9 +33,9 @@ export async function renderChartView(view) {
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin:2px 4px 0">
       <span class="link" id="load-earlier" style="font-size:13px">‹ 加载更早</span>
-      <span class="muted" style="font-size:12px">左右滑动亦可切换时间窗口</span>
+      <span class="muted" style="font-size:12px">按住左右滑动查看各日 K 线信息</span>
     </div>
-    <div class="hint">按住左右拖动平移 K 线（十字光标实时显示对应日期行情）；点 K 线看当日开高低收；点「更多」展开量能等详情。</div>
+    <div class="hint">按住 K 线左右滑动，十字光标跟随显示该日开高低收；点「加载更早」查看更早历史；点「更多」展开量能详情。</div>
   `;
   bindSearch(view);
   renderPeriodSeg();

@@ -245,19 +245,9 @@ export function renderKline(canvas, bars, opts = {}) {
     const dx = ev.clientX - dragStartX;
     if (Math.abs(dx) > 6) moved = true;
     if (!moved) return;
-    // 十字光标跟随手指（K 线不平移、时间轴不动）
+    // 十字光标跟随手指（clamp 到可见范围，不平移 K 线/时间轴）
     const rawX = ev.clientX - rect.left - padL;
-    let vidx = Math.max(0, Math.min(visibleCount - 1, Math.floor(rawX / step)));
-    // 边缘平移：手指滑出 K 线左右边缘才平移（看更早/更近），十字光标保持在边缘
-    if (rawX < 0 && offset > 0) {
-      offset -= 1;
-      if (opts.onOffsetChange) opts.onOffsetChange(offset);
-      vidx = 0;
-    } else if (rawX > plotW && offset < total - visibleCount) {
-      offset += 1;
-      if (opts.onOffsetChange) opts.onOffsetChange(offset);
-      vidx = visibleCount - 1;
-    }
+    const vidx = Math.max(0, Math.min(visibleCount - 1, Math.floor(rawX / step)));
     crosshair = { vidx };
     if (opts.onCrosshair) opts.onCrosshair(bars[offset + vidx], pos, rect.width);
     draw();
