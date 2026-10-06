@@ -210,7 +210,7 @@ export function renderKline(canvas, bars, opts = {}) {
     return Math.max(0, Math.min(visibleCount - 1, Math.floor(x / step)));
   };
 
-  let dragStartX = null, dragStartOffset = 0, moved = false;
+  let dragStartX = null, moved = false;
   const onPointerDown = (ev) => {
     ev.preventDefault(); // 阻止浏览器默认触摸行为（页面滚动/缩放）
     const rect = canvas.getBoundingClientRect();
@@ -230,7 +230,6 @@ export function renderKline(canvas, bars, opts = {}) {
     }
     // 开始拖动：显示十字光标 + 浮层（手指位置对应的 K 线）
     dragStartX = ev.clientX;
-    dragStartOffset = offset;
     moved = false;
     const vidx = toIdx(ev.clientX, ev.clientY);
     crosshair = { vidx: vidx === null ? -1 : vidx };
@@ -240,26 +239,27 @@ export function renderKline(canvas, bars, opts = {}) {
   };
   const onPointerMove = (ev) => {
     if (dragStartX === null) return;
-    ev.preventDefault(); // 阻止滚动（滑多了也不会让整个图跟着页面动）
+    ev.preventDefault(); // 阻止滚动
     const rect = canvas.getBoundingClientRect();
     const pos = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
     const dx = ev.clientX - dragStartX;
     if (Math.abs(dx) > 6) moved = true;
-    // 平移 K 线（达到拖动阈值后）
-    if (moved) {
-      const delta = Math.round(dx / step);
-      if (delta !== 0) {
-        const newOffset = Math.max(0, Math.min(total - visibleCount, dragStartOffset - delta));
-        if (newOffset !== offset) {
-          offset = newOffset;
-          if (opts.onOffsetChange) opts.onOffsetChange(offset);
-        }
-      }
+    if (!moved) return;
+    // 十字光标跟随手指（K 线不平移、时间轴不动）
+    const rawX = ev.clientX - rect.left - padL;
+    let vidx = Math.max(0, Math.min(visibleCount - 1, Math.floor(rawX / step)));
+    // 边缘平移：手指滑出 K 线左右边缘才平移（看更早/更近），十字光标保持在边缘
+    if (rawX < 0 && offset > 0) {
+      offset -= 1;
+      if (opts.onOffsetChange) opts.onOffsetChange(offset);
+      vidx = 0;
+    } else if (rawX > plotW && offset < total - visibleCount) {
+      offset += 1;
+      if (opts.onOffsetChange) opts.onOffsetChange(offset);
+      vidx = visibleCount - 1;
     }
-    // 十字光标跟随手指 + 浮层实时显示划到位置的 K 线信息
-    const vidx = toIdx(ev.clientX, ev.clientY);
-    crosshair = { vidx: vidx === null ? -1 : vidx };
-    if (opts.onCrosshair) opts.onCrosshair(vidx === null ? null : bars[offset + vidx], pos, rect.width);
+    crosshair = { vidx };
+    if (opts.onCrosshair) opts.onCrosshair(bars[offset + vidx], pos, rect.width);
     draw();
   };
   const onPointerUp = (ev) => {
