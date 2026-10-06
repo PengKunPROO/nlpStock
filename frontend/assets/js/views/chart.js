@@ -35,13 +35,12 @@ export async function renderChartView(view) {
       <span class="link" id="load-earlier" style="font-size:13px">‹ 加载更早</span>
       <span class="muted" style="font-size:12px">左右滑动亦可切换时间窗口</span>
     </div>
-    <div class="hint">点击 / 触摸 K 线查看当日开高低收；点「更多」展开量能等详情。左右滑动（或点「加载更早」）查看更早历史。</div>
+    <div class="hint">按住左右拖动平移 K 线（十字光标实时显示对应日期行情）；点 K 线看当日开高低收；点「更多」展开量能等详情。</div>
   `;
   bindSearch(view);
   renderPeriodSeg();
   renderLegend();
   document.getElementById('load-earlier').onclick = () => { startIdx = Math.min(allBars.length - VISIBLE_COUNT, startIdx + VISIBLE_COUNT); renderVisible(); };
-  bindSwipe(view, code);
   await loadChart(code, view.dataset.period || '1d');
 }
 
@@ -108,34 +107,6 @@ function bindSearch(view) {
   });
 }
 
-// 水平滑动：左滑加载更早历史，右滑回到更近
-function bindSwipe(view, code) {
-  const canvas = document.getElementById('kline-canvas');
-  if (!canvas) return;
-  let sx = null, sy = null, dragging = false;
-  canvas.addEventListener('pointerdown', (e) => { sx = e.clientX; sy = e.clientY; dragging = true; });
-  canvas.addEventListener('pointermove', (e) => {
-    if (!dragging || sx === null) return;
-    if (Math.abs(e.clientX - sx) > 30 && Math.abs(e.clientY - sy) < 40) {
-      // 水平滑动意图，阻止页面滚动
-      e.preventDefault();
-    }
-  });
-  canvas.addEventListener('pointerup', (e) => {
-    if (!dragging || sx === null) return;
-    const dx = e.clientX - sx;
-    const dy = e.clientY - sy;
-    dragging = false; sx = null; sy = null;
-    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return; // 太小或偏垂直 → 视为点击
-    if (dx < 0) { // 左滑 → 看更早（视窗后移）
-      startIdx = Math.min(allBars.length - VISIBLE_COUNT, startIdx + VISIBLE_COUNT);
-    } else { // 右滑 → 看更近（视窗前移）
-      startIdx = Math.max(0, startIdx - VISIBLE_COUNT);
-    }
-    renderVisible();
-  });
-}
-
 async function loadChart
 (code, period, silent = false) {
   const head = document.getElementById('chart-head');
@@ -180,21 +151,25 @@ async function loadChart
   }
 }
 
-// 渲染当前视窗 [startIdx, startIdx+VISIBLE_COUNT)：K 线根数固定，左右滑动/加载更早 = 平移而非缩放
+// 渲染视窗：固定根数 + 内部 offset，拖动平移（renderKline 内部重绘，不重建实例）
 function renderVisible() {
   const canvas = document.getElementById('kline-canvas');
   const tip = document.getElementById('kline-tip');
   if (!canvas || !allBars.length) return;
-  const visible = allBars.slice(startIdx, startIdx + VISIBLE_COUNT);
-  const markers = allMarkers
-    .map((m) => ({ ...m, idx: m.idx - startIdx }))
-    .filter((m) => m.idx >= 0 && m.idx < VISIBLE_COUNT);
   if (cleanupFn) cleanupFn();
   hideTip();
   selectedIdx = null;
-  cleanupFn = renderKline(canvas, visible, {
+  cleanupFn = renderKline(canvas, allBars, {
     ...maVisible,
-    markers,
+    visibleCount: VISIBLE_COUNT,
+    offset: startIdx,
+    onOffsetChange: (newOffset) => { startIdx = newOffset; },
+    markers: allMarkers,
+    onCrosshair: (bar, pos, width) => {
+      // 拖动时实时跟随显示对应 K 线信息
+      if (bar) showTip(tip, bar, pos, width);
+      else hideTip();
+    },
     onBarTap: (bar, idx, pos, width) => {
       if (idx === selectedIdx) {
         // 再次点击同一根 K 线：切换关闭浮层

@@ -129,20 +129,22 @@ def test_max_hold_forced_exit():
     assert t["holding_days"] >= 5
 
 
-def test_end_of_data_not_in_win_rate():
-    """期末平仓不计入胜率。"""
+def test_no_sell_holds_to_end_marked_to_market():
+    """期末不平仓：持仓按最后收盘价 mark-to-market，不产生 end_of_data 假卖出。"""
     closes = [10.0] * 10 + [10.5 + i * 0.1 for i in range(10)]
     result = run(SELL_BELOW_MA5, closes, opens=list(closes))
-    t = result["trades"][0]
-    assert t["exit_reason"] == "end_of_data"
-    # 单票 metrics 里 trade_count=0（end_of_data 不计入）
+    # 价格一路上涨，从没跌破 MA5 → 无主动卖出，期末持仓不平仓
+    assert result["trades"] == []
     assert result["metrics"]["trade_count"] == 0
     assert result["metrics"]["win_rate_pct"] is None
+    # 期末 mark-to-market：浮盈计入 final_equity 和 total_return_pct
+    assert result["metrics"]["total_return_pct"] > 0
+    assert result["metrics"]["final_equity"] > 1000000
 
 
 def test_position_sizing_cash_constraint():
     """仓位现金约束：资金不足按可买数量成交。"""
-    closes = [10.0] * 10 + [10.5, 11.0, 11.5, 12.0]
+    closes = [10.0] * 10 + [10.5, 11.0, 11.5, 12.0, 12.5, 11.0, 10.8, 10.6, 10.4]
     result = run(SELL_BELOW_MA5, closes, opens=list(closes), initial_cash=15000)
     t = result["trades"][0]
     # 15000 / 11.0 = 1363.6 → 1300 shares

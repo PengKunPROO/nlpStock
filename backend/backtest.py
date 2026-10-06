@@ -321,11 +321,8 @@ def _run_one_stock(
             "positions": pos_snapshot,
         })
 
-    # ---- 期末平仓 ----
-    if position is not None:
-        p = position
-        price = s.last_close or p["entry_price"]
-        do_sell(n - 1, price, "end_of_data", s.dates[-1], exit_ev={"trigger": "回测期末，按最后收盘价估值平仓"})
+    # ---- 期末不平仓：持仓按最后收盘价 mark-to-market（已在每日循环计入 equity_curve）----
+    # final 直接用 equity_curve 最后一项，不再产生 end_of_data 假卖出
 
     # ---- 单票 metrics ----
     closed = [t for t in trades if t["exit_reason"] != "end_of_data"]

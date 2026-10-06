@@ -82,7 +82,7 @@ _RULES_MODEL = """策略规则模型（config 的 rules 数组，每条 = 触发
 - max_times：该规则在单只股票的单次持仓内最多触发次数（"跌5%补仓"这类必须设 1，防止反复补仓）；null = 不限；清仓后重置
 - 补仓/加仓 = 一条 action=buy 的规则（when 引用 pnl_pct/hold_days 等持仓字段），不是特殊字段
 - 减仓/分批止盈 = action=sell 且 size_pct<100；阶梯止盈 = 多条 sell 规则各设阈值档
-- 移动止损两种口径："从最高点回落X%离场"若指盘中保护 → risk.trailing_stop_pct（引擎跟踪持仓期盘中最高价，盘中跌破止损价即成交）；若指收盘确认 → sell 规则用 dd_from_peak<=-X（T收盘判定、T+1开盘卖）。用户未明确时默认 trailing_stop_pct 并写入 warnings
+- 移动止损两种口径："从最高点回落X%离场"若指盘中保护 → risk.trailing_stop_pct（引擎跟踪持仓期盘中最高价，盘中跌破止损价即成交）；若指收盘确认 → sell 规则用 dd_from_peak<=-X（T收盘判定、T+1开盘卖）。用户未明确时不得默认填
 - 风控（止损/止盈/移动止损/最长持仓）仍用 risk 字段，不写成 rules"""
 
 _SCREENING_OUTPUT = """config 输出字段（ScreeningStrategy，选股策略——只负责"买什么/何时入场"，不含持仓管理与风控）：
@@ -98,7 +98,7 @@ _TRADING_OUTPUT = """config 输出字段（TradingStrategy，交易策略——�
 - description：一句话说明策略思路
 - indicators：1-30个指标（见指标目录），rules 中用到的指标必须先声明
 - rules：1条以上持仓管理规则（见规则模型）。action=buy 仅用于补仓/加仓，其 when 必须引用持仓状态字段（如 pnl_pct<=-5、hold_days>=3）；action=sell 用于卖出/减仓（引用价格/指标或持仓字段均可）
-- risk：{"stop_loss_pct":8.0,"trailing_stop_pct":null,"max_hold_days":30,"take_profit_pct":null}（null=禁用；trailing_stop_pct=移动止损%，自持仓期最高价回撤盘中触发）
+- risk：{"stop_loss_pct":null,"trailing_stop_pct":null,"max_hold_days":null,"take_profit_pct":null}（null=禁用；仅在用户明确提到对应风控时才填值，禁止默认填）
 - backtest_defaults：{"start":"2025-01-01","end":"<今天>","initial_cash":1000000,"position_pct":20,"max_positions":5,"fee_bps":2.5,"stamp_tax_bps":5.0}
 - 不要输出 entry/universe 字段（那些属于选股策略）"""
 
@@ -135,6 +135,7 @@ _TRADING_PROTOCOL = """输出协议（严格遵守）：
 - 信息足够时立即输出 config，不要为了流程而追问；通常 1-2 轮收敛
 - 分阶段叙事（先A后B再C）必须用 within 回看语义表达阶段先后
 - 买多少/加仓/减仓必须用 rules 表达（见规则模型）；风控（止损/止盈/移动止损/最长持仓）用 risk 字段，不写成 rules
+- 风控字段只在用户明确提到时填写（"止损8%"→stop_loss_pct=8、"从高点回落8%走"→trailing_stop_pct=8、"涨20%卖"→take_profit_pct=20、"拿20天"→max_hold_days=20）；用户没提的一律 null，禁止默认填 stop_loss_pct=8 或 max_hold_days=30 等任何风控参数
 - 语义强制：交易策略里"跌N%"、"涨N%"、"浮亏/浮盈N%"、"回本/解套"等相对持仓成本的说法，一律用内置持仓字段 pnl_pct 表达（跌→pnl_pct<=-N，涨→pnl_pct>=N），禁止为此生成 MA/PCT_CHANGE 等任何技术指标；只有明确说"价格站上/跌破某均线"、"N日均线"、"金叉死叉"等才用技术指标
 - config 必须可通过 TradingStrategy 校验：指标id全部声明、条件引用可解析、rules 非空、每条 buy 规则必须引用持仓字段、risk/backtest_defaults 完整"""
 
@@ -175,7 +176,7 @@ _TRADING_REFERENCE = {
         {"when": {"logic": "all", "conditions": [{"left": "pnl_pct", "op": ">=", "right": 20}]},
          "action": "sell", "size_pct": 100, "note": "涨20%清仓"},
     ],
-    "risk": {"stop_loss_pct": 8.0, "trailing_stop_pct": None, "max_hold_days": None, "take_profit_pct": None},
+    "risk": {"stop_loss_pct": None, "trailing_stop_pct": None, "max_hold_days": None, "take_profit_pct": None},
     "backtest_defaults": {
         "start": "2025-01-01", "end": "2025-12-31", "initial_cash": 1000000,
         "position_pct": 20, "max_positions": 5, "fee_bps": 2.5, "stamp_tax_bps": 5.0,

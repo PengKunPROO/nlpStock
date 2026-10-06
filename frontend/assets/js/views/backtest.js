@@ -161,11 +161,8 @@ function renderReport(el, result) {
       </div>
     </div>
     <div class="metrics">
-      ${metric('平均收益', fmtPct(m.avg_total_return_pct), pctClass(m.avg_total_return_pct))}
-      ${metric('平均胜率', m.avg_win_rate_pct === null || m.avg_win_rate_pct === undefined ? '—' : m.avg_win_rate_pct.toFixed(1) + '%', (m.avg_win_rate_pct ?? 0) >= 50 ? 'up' : '')}
       ${metric('最大回撤', fmtPct(m.max_drawdown_pct, false), 'down')}
       ${metric('交易次数', m.trade_count + '（盈' + (m.win_count ?? 0) + ' 亏' + (m.loss_count ?? 0) + '）')}
-      ${metric('组合合计', fmtPct(m.total_return_pct), pctClass(m.total_return_pct))}
       ${metric('期末资产', fmtMoney(m.final_equity))}
     </div>
     <div class="card">
@@ -352,7 +349,13 @@ async function openReplay(code, name, trades) {
     }
     const canvas = overlay.querySelector('#replay-canvas');
     replayCleanup = renderKline(canvas, bars, {
+      visibleCount: 60,
       markers,
+      onCrosshair: (bar, pos, width) => {
+        // 拖动时实时跟随显示对应 K 线信息
+        if (bar) showBarTip(bar, pos, width);
+        else tip.style.display = 'none';
+      },
       onMarkerTap: (m, pos, width) => {
         const d = m.detail || {};
         tip.innerHTML = `
