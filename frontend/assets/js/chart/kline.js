@@ -275,10 +275,8 @@ export function renderKline(canvas, bars, opts = {}) {
       draw();
       return;
     }
-    // 水平拖动结束：隐藏十字光标 + 浮层（垂直滑动无动作）
+    // 水平拖动结束：保留十字光标 + 浮层（停在最后悬浮的 K 线；点击空白处才关闭）
     if (horizontal) {
-      crosshair = null;
-      if (opts.onCrosshair) opts.onCrosshair(null, pos, rect.width);
       draw();
     }
   };
