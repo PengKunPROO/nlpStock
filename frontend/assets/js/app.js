@@ -4,8 +4,8 @@ import state, { ensureSettings } from './store.js';
 import { setJobsChangeHandler } from './jobs.js';
 import { toast } from './util.js';
 import { renderStrategyView } from './views/strategy.js';
-import { renderScreenView } from './views/screen.js';
-import { renderBacktestView } from './views/backtest.js';
+import { renderScreenView, refreshScreenProgress } from './views/screen.js';
+import { renderBacktestView, refreshBacktestProgress } from './views/backtest.js';
 import { renderChartView } from './views/chart.js';
 import { renderSettingsView } from './views/settings.js';
 
@@ -89,12 +89,19 @@ async function render(silent = false) {
   }
 }
 
-// 后台任务状态变化：更新指示器；若当前 Tab 有对应任务，静默刷新（进度/结果）
+// 后台任务状态变化：更新指示器；running 只刷进度条（不重渲染 view，避免闪烁/重置交互）；done 重渲染出结果
 setJobsChangeHandler(() => {
+  updateJobIndicator();
   const tab = currentTab();
-  const job = tab === 'screen' ? state.activeScreenJob : tab === 'backtest' ? state.activeBacktestJob : null;
-  if (job) render(true); // 静默刷新，不清空（避免进度条闪烁）
-  else updateJobIndicator();
+  if (tab === 'screen') {
+    const job = state.activeScreenJob;
+    if (job && job.status === 'running') refreshScreenProgress();
+    else if (job) render(true); // done/error → 显示结果/错误
+  } else if (tab === 'backtest') {
+    const job = state.activeBacktestJob;
+    if (job && job.status === 'running') refreshBacktestProgress();
+    else if (job) render(true);
+  }
 });
 
 document.getElementById('view').addEventListener('rerender', () => render());

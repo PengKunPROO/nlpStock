@@ -4,7 +4,7 @@ import { runJob, getActiveJob } from '../jobs.js';
 import state from '../store.js';
 import { renderEquity } from '../chart/equity.js';
 import { renderKline } from '../chart/kline.js';
-import { EXIT_LABEL, esc, fmtMoney, fmtPct, fmtPrice, h, paginate, pctClass, toast } from '../util.js';
+import { EXIT_LABEL, esc, fmtMoney, fmtPct, fmtPrice, h, paginate, pctClass, toast, dateToday, daysAgo } from '../util.js';
 
 const metric = (k, v, cls = '') => `<div class="metric"><div class="k">${k}</div><div class="v ${cls}">${v ?? '—'}</div></div>`;
 
@@ -30,8 +30,8 @@ export async function renderBacktestView(view) {
         </select>
       </div>
       <div class="field-row">
-        <div class="field"><label>开始日期</label><input id="bt-start" type="date"></div>
-        <div class="field"><label>结束日期</label><input id="bt-end" type="date"></div>
+        <div class="field"><label>开始日期</label><input id="bt-start" type="date" value="${daysAgo(90)}"></div>
+        <div class="field"><label>结束日期</label><input id="bt-end" type="date" value="${dateToday()}"></div>
       </div>
       <div class="field-row">
         <div class="field"><label>初始资金（每票）</label><input id="bt-cash" type="number" value="1000000" step="100000"></div>
@@ -50,8 +50,9 @@ export async function renderBacktestView(view) {
     try {
       const d = await api.getStrategy(Number(sel.value));
       const bd = d.current.backtest_defaults || {};
-      document.getElementById('bt-start').value = bd.start || '';
-      document.getElementById('bt-end').value = bd.end || '';
+      // 日期默认：今天往前 3 个月（不用策略里的固定历史区间）
+      document.getElementById('bt-start').value = daysAgo(90);
+      document.getElementById('bt-end').value = dateToday();
       document.getElementById('bt-cash').value = bd.initial_cash || 1000000;
       document.getElementById('bt-pos').value = bd.position_pct || 20;
     } catch { /* keep current values */ }
@@ -92,12 +93,23 @@ export async function renderBacktestView(view) {
   // 恢复：running 任务显示进度，done 显示报告
   const job = getActiveJob('backtest');
   if (job && job.status === 'running') {
-    const p = job.progress || { done: 0, total: 0 };
-    document.getElementById('bt-progress').innerHTML = `<div class="card"><div class="spinner" style="margin:14px auto"></div>
-      <div class="muted" style="text-align:center;font-size:13px">${p.total ? `独立回测 ${p.done}/${p.total}（${esc(p.current || '')}）` : '独立回测中…'}（切页后后台继续）</div></div>`;
+    renderProgress(document.getElementById('bt-progress'), job);
   } else if (state.lastBacktestResult) {
     renderReport(document.getElementById('bt-report'), state.lastBacktestResult);
   }
+}
+
+function renderProgress(el, job) {
+  const p = job.progress || { done: 0, total: 0 };
+  el.innerHTML = `<div class="card"><div class="spinner" style="margin:14px auto"></div>
+    <div class="muted" style="text-align:center;font-size:13px">${p.total ? `独立回测 ${p.done}/${p.total}（${esc(p.current || '')}）` : '独立回测中…'}（切页后后台继续）</div></div>`;
+}
+
+// 局部刷新进度条（不重渲染整个 view，避免闪烁/重置用户交互）
+export function refreshBacktestProgress() {
+  const job = getActiveJob('backtest');
+  const el = document.getElementById('bt-progress');
+  if (job && job.status === 'running' && el) renderProgress(el, job);
 }
 
 // 回测池卡片：chips（可删除）+ 空态（提示去选股页勾选 + 跳转按钮）

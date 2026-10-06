@@ -99,6 +99,13 @@ function renderProgress(el, job) {
     </div>`;
 }
 
+// 局部刷新进度条（不重渲染整个 view，避免闪烁/重置用户交互）
+export function refreshScreenProgress() {
+  const job = getActiveJob('screen');
+  const el = document.getElementById('sc-progress');
+  if (job && job.status === 'running' && el) renderProgress(el, job);
+}
+
 function picked(code) {
   return state.screenPicks.some((p) => p.thscode === code);
 }

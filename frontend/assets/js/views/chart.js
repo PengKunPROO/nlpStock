@@ -13,7 +13,7 @@ let selectedIdx = null; // 当前浮层对应的 K 线索引（null = 浮层关�
 const VISIBLE_COUNT = 60; // 可见 K 线根数（固定 → 左右滑动是平移而非缩放）
 const TOTAL_LOAD = 500; // 一次加载的 K 线根数（后端上限）
 let allBars = []; // 已加载的全部 K 线
-let startIdx = 0; // 视窗起点（0=最新，越大越早）
+let startIdx = 0; // 视窗起点（offset 语义：0=最早，allBars.length-VISIBLE_COUNT=最新）
 let allMarkers = []; // 信号点标注（全局索引）
 
 export async function renderChartView(view) {
@@ -40,7 +40,7 @@ export async function renderChartView(view) {
   bindSearch(view);
   renderPeriodSeg();
   renderLegend();
-  document.getElementById('load-earlier').onclick = () => { startIdx = Math.min(allBars.length - VISIBLE_COUNT, startIdx + VISIBLE_COUNT); renderVisible(); };
+  document.getElementById('load-earlier').onclick = () => { startIdx = Math.max(0, startIdx - VISIBLE_COUNT); renderVisible(); }; // 看更早（offset 减小）
   await loadChart(code, view.dataset.period || '1d');
 }
 
@@ -120,7 +120,7 @@ async function loadChart
     state.chartCode = code;
     document.title = `${data.name} · 策略选股`;
     allBars = data.bars;
-    startIdx = 0;
+    startIdx = Math.max(0, allBars.length - VISIBLE_COUNT); // 默认定位到最新
     allMarkers = [];
     if (state.chartSignalDate) {
       const si = allBars.findIndex((b) => b.date === state.chartSignalDate);
