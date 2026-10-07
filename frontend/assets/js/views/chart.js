@@ -1,7 +1,8 @@
-// 图表 view: search + period switch + candlestick + volume analysis + tap tooltip
+// 行情 view: K线（search + period + candlestick）｜ 自选（分组 + 自选股）
 import { api } from '../api.js';
 import state from '../store.js';
 import { MA_LEGEND, renderKline } from '../chart/kline.js';
+import { renderWatchlistView } from './watchlist.js';
 import { VOL_STATE, debounce, esc, fmtPct, fmtPrice, fmtTurnover, fmtVolume, h, pctClass, toast } from '../util.js';
 
 const PERIODS = [
@@ -17,8 +18,29 @@ let startIdx = 0; // 视窗起点（offset 语义：0=最早，allBars.length-VI
 let allMarkers = []; // 信号点标注（全局索引）
 
 export async function renderChartView(view) {
-  const code = state.chartCode || '600519.SH';
+  const sub = view.dataset.sub || 'kline';
   view.innerHTML = `
+    <div class="seg" id="chart-seg" style="margin-bottom:12px">
+      <button data-sub="kline" class="${sub === 'kline' ? 'active' : ''}">K线</button>
+      <button data-sub="watchlist" class="${sub === 'watchlist' ? 'active' : ''}">自选</button>
+    </div>
+    <div id="chart-body"></div>
+  `;
+  view.querySelectorAll('#chart-seg button').forEach((b) => {
+    b.onclick = () => {
+      if (b.dataset.sub === view.dataset.sub) return;
+      view.dataset.sub = b.dataset.sub;
+      renderChartView(view);
+    };
+  });
+  const body = document.getElementById('chart-body');
+  if (sub === 'watchlist') {
+    await renderWatchlistView(body);
+    return;
+  }
+  // K线模式
+  const code = state.chartCode || '600519.SH';
+  body.innerHTML = `
     <div class="search-box">
       <input id="chart-search" type="text" placeholder="搜索个股 / 指数 / 板块（代码或名称）" autocomplete="off">
       <div id="chart-drop" class="search-drop" style="display:none"></div>

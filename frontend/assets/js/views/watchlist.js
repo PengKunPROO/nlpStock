@@ -108,7 +108,12 @@ function loadItems(view, gid, groups) {
         <div><b>${esc(it.name)}</b> <span class="muted" style="font-size:12px">${esc(it.thscode)}</span></div>
         <button class="del" title="移出自选">✕</button>
       </div>`);
-      row.onclick = () => { state.chartCode = it.thscode; location.hash = '#/chart'; };
+      row.onclick = () => {
+        state.chartCode = it.thscode;
+        const v = document.getElementById('view');
+        v.dataset.sub = 'kline';
+        v.dispatchEvent(new CustomEvent('rerender'));
+      };
       row.querySelector('.del').onclick = (ev) => {
         ev.stopPropagation();
         api.deleteWatchlistItem(it.id).then(() => loadItems(view, gid, groups)).catch((e) => toast(`删除失败：${e.message}`, true));
