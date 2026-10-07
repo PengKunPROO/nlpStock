@@ -177,7 +177,7 @@ function renderResults(el, result, isCached = false) {
             <span class="muted">/ 大盘 <span class="mono ${pctClass(m.bench_20d)}">${fmtPct(m.bench_20d)}</span></span>
           </div>`
         : '';
-      const card = h(`<div class="card" data-code="${esc(m.thscode)}" style="cursor:pointer;padding:13px 16px">
+      const card = h(`<div class="card clickable" data-code="${esc(m.thscode)}" style="padding:13px 16px">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
           <input type="checkbox" data-pick="${esc(m.thscode)}" ${checked} style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)">
           <div style="min-width:0;flex:1">

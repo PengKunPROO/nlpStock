@@ -104,7 +104,7 @@ function loadItems(view, gid, groups) {
     }
     el.innerHTML = '';
     for (const it of items) {
-      const row = h(`<div class="card" data-code="${esc(it.thscode)}" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding:12px 16px">
+      const row = h(`<div class="card clickable" data-code="${esc(it.thscode)}" style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px">
         <div><b>${esc(it.name)}</b> <span class="muted" style="font-size:12px">${esc(it.thscode)}</span></div>
         <button class="del" title="移出自选">✕</button>
       </div>`);

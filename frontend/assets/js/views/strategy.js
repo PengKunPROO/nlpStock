@@ -69,7 +69,7 @@ async function renderList(view) {
     return;
   }
   const cards = items.map((s) => `
-    <div class="card" data-sid="${s.id}" style="cursor:pointer">
+    <div class="card clickable" data-sid="${s.id}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="min-width:0">
           <div style="font-size:16px;font-weight:700;margin-bottom:3px">${esc(s.name)}</div>

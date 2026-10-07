@@ -324,3 +324,10 @@ code.json-box { display: block; white-space: pre; font-family: "SF Mono", ui-mon
 /* 统一可交互元素的过渡（seg-btn / chip / page-btn / s-item / row） */
 .seg-btn, .page-btn, .s-item, .row, .search-drop .s-item { transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease), transform var(--dur) var(--ease); }
 .seg-btn:active, .page-btn:active { transform: scale(0.97); }
+
+/* ---- 桌面端布局优化（≥1024px 内容更宽，指标/表单网格加密） ---- */
+@media (min-width: 1024px) {
+  .metrics { grid-template-columns: repeat(4, 1fr); }
+  .field-row { gap: 14px; }
+  .card { padding: 18px; }
+}
