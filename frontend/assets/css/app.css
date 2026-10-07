@@ -103,7 +103,7 @@ html, body {
 .btn:active { opacity: 0.7; }
 .btn.secondary { background: var(--chip-bg); color: var(--accent); }
 .btn.danger { background: var(--danger); }
-.btn.sm { width: auto; padding: 7px 14px; min-height: 36px; font-size: 14px; border-radius: 10px; }
+.btn.sm { width: auto; padding: 7px 14px; min-height: 44px; font-size: 14px; border-radius: 10px; }
 .btn[disabled] { opacity: 0.45; pointer-events: none; }
 
 /* inputs */
@@ -122,14 +122,15 @@ textarea { resize: vertical; min-height: 90px; line-height: 1.45; }
 .seg { display: flex; background: var(--chip-bg); border-radius: 10px; padding: 2px; margin-bottom: 14px; }
 .seg button {
   flex: 1; border: none; background: none; color: var(--text); font-size: 13px; font-family: inherit;
-  padding: 7px 4px; border-radius: 8px; cursor: pointer; min-height: 34px; white-space: nowrap;
+  padding: 7px 4px; border-radius: 8px; cursor: pointer; min-height: 44px; white-space: nowrap;
 }
 .seg button.active { background: var(--card); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
 
 /* 横向滚动的分组 tab（自选股分组等） */
 .seg-btn {
-  padding: 7px 14px; border: 0.5px solid var(--sep); border-radius: 16px; background: var(--card-2);
-  color: var(--text-2); font-size: 13px; cursor: pointer; white-space: nowrap; flex-shrink: 0; font-family: inherit;
+  padding: 8px 16px; border: 0.5px solid var(--sep); border-radius: 16px; background: var(--card-2);
+  color: var(--text-2); font-size: 14px; cursor: pointer; white-space: nowrap; flex-shrink: 0; font-family: inherit;
+  min-height: 44px; display: inline-flex; align-items: center; gap: 4px;
 }
 .seg-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
 
@@ -233,8 +234,8 @@ textarea { resize: vertical; min-height: 90px; line-height: 1.45; }
 .rule-logic { font-size: 13px; color: var(--text-2); margin: 10px 0 6px; }
 
 /* 基础 input/select：去掉 flex:1 避免挤成一团，加大触控目标 */
-.cond input, .cond select { padding: 8px 10px; font-size: 14px; border-radius: 8px; border: 0.5px solid var(--sep); background: var(--card); color: var(--text); min-height: 40px; width: auto; }
-.cond .del { color: var(--danger); background: none; border: none; font-size: 16px; cursor: pointer; padding: 8px; flex-shrink: 0; min-height: 40px; line-height: 1; }
+.cond input, .cond select { padding: 8px 10px; font-size: 14px; border-radius: 8px; border: 0.5px solid var(--sep); background: var(--card); color: var(--text); min-height: 44px; width: auto; }
+.cond .del { color: var(--danger); background: none; border: none; font-size: 16px; cursor: pointer; padding: 8px; flex-shrink: 0; min-height: 44px; line-height: 1; }
 .hint { font-size: 12px; color: var(--text-3); margin: 6px 0 12px; line-height: 1.5; }
 
 /* kline */
