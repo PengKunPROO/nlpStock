@@ -37,13 +37,13 @@ function renderBody(view, groups) {
       ${groups.map((g) => `<button class="seg-btn ${g.id === gid ? 'active' : ''}" data-gid="${g.id}">${esc(g.name)}<span class="muted" style="margin-left:4px">${g.count}</span></button>`).join('')}
       <button class="seg-btn" id="wl-add-group" title="新建分组">＋</button>
     </div>
-    <div class="card" style="margin-bottom:10px">
-      <div style="display:flex;gap:6px;align-items:center">
-        <input id="wl-search" type="text" placeholder="搜索股票，加入「${esc(group.name)}」" autocomplete="off">
-        <button class="btn sm secondary" id="wl-rename">重命名</button>
-        <button class="btn sm" id="wl-del-group" style="color:var(--danger)">删除分组</button>
-      </div>
+    <div class="card" style="margin-bottom:10px;position:relative">
+      <input id="wl-search" type="text" placeholder="搜索股票添加到本分组" autocomplete="off">
       <div id="wl-drop" class="search-drop" style="display:none"></div>
+      <div style="display:flex;gap:10px;margin-top:10px">
+        <button class="btn sm secondary" id="wl-rename" style="flex:1">重命名分组</button>
+        <button class="btn sm" id="wl-del-group" style="flex:1;color:var(--danger)">删除分组</button>
+      </div>
     </div>
     <div id="wl-items"></div>
   `;
@@ -126,8 +126,8 @@ function promptName(view, title, initial) {
       <div class="card">
         <div class="field"><label>${esc(title)}</label><input id="wl-name" type="text" value="${esc(initial)}" placeholder="分组名"></div>
         <div style="display:flex;gap:10px">
-          <button class="btn" id="wl-name-ok">确定</button>
-          <button class="btn sm secondary" id="wl-name-cancel">取消</button>
+          <button class="btn" id="wl-name-ok" style="flex:1">确定</button>
+          <button class="btn secondary" id="wl-name-cancel" style="flex:1">取消</button>
         </div>
       </div>`;
     document.getElementById('wl-name-ok').onclick = () => resolve(document.getElementById('wl-name').value.trim());

@@ -301,10 +301,12 @@ function buildForm(cfg, type) {
     const r = cfg.risk || {};
     wrap.appendChild(h(`<div class="card">
     <div class="field-row">
-<div class="field"><label>止损 %（空=禁用）</label><input id="f-stop" type="number" step="0.5" value="${r.stop_loss_pct ?? ''}"></div>
-<div class="field"><label>移动止损 %（自最高点，空=禁用）</label><input id="f-trail" type="number" step="0.5" value="${r.trailing_stop_pct ?? ''}"></div>
-<div class="field"><label>止盈 %（空=禁用）</label><input id="f-tp" type="number" step="0.5" value="${r.take_profit_pct ?? ''}"></div>
-      <div class="field"><label>最长持仓（日，空=禁用）</label><input id="f-hold" type="number" step="1" value="${r.max_hold_days ?? ''}"></div>
+      <div class="field"><label>止损%</label><input id="f-stop" type="number" step="0.5" placeholder="空=禁用" value="${r.stop_loss_pct ?? ''}"></div>
+      <div class="field"><label>移动止损%</label><input id="f-trail" type="number" step="0.5" placeholder="自最高点" value="${r.trailing_stop_pct ?? ''}"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>止盈%</label><input id="f-tp" type="number" step="0.5" placeholder="空=禁用" value="${r.take_profit_pct ?? ''}"></div>
+      <div class="field"><label>最长持仓(日)</label><input id="f-hold" type="number" step="1" placeholder="空=禁用" value="${r.max_hold_days ?? ''}"></div>
     </div>
   </div>`));
 

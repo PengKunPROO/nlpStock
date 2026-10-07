@@ -31,12 +31,10 @@ export async function renderChartView(view) {
       <canvas id="kline-canvas" class="kline" style="height:440px"></canvas>
       <div id="kline-tip" class="kline-tip" style="display:none"></div>
     </div>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin:6px 4px 0">
-      <div style="display:flex;gap:10px;align-items:center">
-        <button class="btn sm secondary" id="shift-prev" style="padding:7px 16px">‹ 更早</button>
-        <button class="btn sm secondary" id="shift-next" style="padding:7px 16px">更新 ›</button>
-      </div>
-      <span class="muted" style="font-size:12px">短按翻半屏 · 长按连续翻</span>
+    <div style="display:flex;align-items:center;gap:10px;margin:6px 4px 0">
+      <button class="btn sm secondary" id="shift-prev" style="padding:7px 16px">‹ 更早</button>
+      <button class="btn sm secondary" id="shift-next" style="padding:7px 16px">更新 ›</button>
+      <span class="muted" style="font-size:12px">短按半屏·长按连续</span>
     </div>
     <div class="hint">按住 K 线左右滑动，十字光标跟随显示该日开高低收；用「‹更早 / 更新›」按钮翻历史；点「更多」展开量能详情。</div>
   `;

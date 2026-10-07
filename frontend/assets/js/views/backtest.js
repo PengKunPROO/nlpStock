@@ -127,10 +127,12 @@ function renderPoolCard(el) {
         <button class="bt-pick-x" data-i="${i}" aria-label="移除 ${esc(pk.name)}" style="border:none;background:none;cursor:pointer;font-size:15px;line-height:1;padding:0 2px;color:var(--muted)">✕</button>
       </span>`).join('')}
     </div>
-    <button class="btn sm secondary" id="bt-add-watch" style="margin-bottom:6px">＋ 从自选股添加</button>` : `<div class="empty" style="padding:16px 0">
-        回测池为空。可从选股结果勾选，或从自选股添加。<br>
-        <button class="btn sm secondary" id="bt-go-screen" style="margin-top:12px">去选股页勾选</button>
-        <button class="btn sm secondary" id="bt-add-watch" style="margin-top:8px">＋ 从自选股添加</button>
+    <button class="btn sm secondary" id="bt-add-watch" style="width:100%;margin-bottom:6px">＋ 从自选股添加</button>` : `<div class="empty" style="padding:16px 0">
+        回测池为空。可从选股结果勾选，或从自选股添加。
+        <div style="display:flex;gap:10px;margin-top:12px">
+          <button class="btn sm secondary" id="bt-go-screen" style="flex:1">去选股页勾选</button>
+          <button class="btn sm secondary" id="bt-add-watch" style="flex:1">＋ 从自选股添加</button>
+        </div>
       </div>`}
   `;
   const go = el.querySelector('#bt-go-screen');
