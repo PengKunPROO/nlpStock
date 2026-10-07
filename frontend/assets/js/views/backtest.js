@@ -4,7 +4,7 @@ import { runJob, getActiveJob } from '../jobs.js';
 import state from '../store.js';
 import { renderEquity } from '../chart/equity.js';
 import { renderKline } from '../chart/kline.js';
-import { EXIT_LABEL, esc, fmtMoney, fmtPct, fmtPrice, h, paginate, pctClass, toast, dateToday, daysAgo } from '../util.js';
+import { EXIT_LABEL, esc, fmtMoney, fmtPct, fmtPrice, h, paginate, pctClass, toast, dateToday, daysAgo, localizeExpr } from '../util.js';
 
 const metric = (k, v, cls = '') => `<div class="metric"><div class="k">${k}</div><div class="v ${cls}">${v ?? '—'}</div></div>`;
 
@@ -208,7 +208,7 @@ function evHtml(ev) {
     const cls = c.passed ? 'ev-pass' : 'ev-fail';
     const lv = c.left === null || c.left === undefined ? '—' : Number(c.left).toFixed(4);
     const rv = c.right === null || c.right === undefined ? '—' : Number(c.right).toFixed(4);
-    return `<div class="ev-row"><span class="${cls}">${c.passed ? '✓' : '✗'}</span><code>${esc(c.expr)}</code><span class="ev-val">${lv} vs ${rv}</span>${c.note ? `<span class="muted">${esc(c.note)}</span>` : ''}</div>`;
+    return `<div class="ev-row"><span class="${cls}">${c.passed ? '✓' : '✗'}</span><code>${esc(localizeExpr(c.expr))}</code><span class="ev-val">${lv} vs ${rv}</span>${c.note ? `<span class="muted">${esc(c.note)}</span>` : ''}</div>`;
   }).join('');
   const dateStr = ev.signal_date ? ` · 信号日 ${esc(ev.signal_date)}` : '';
   return `<div class="ev-box">${rows}${dateStr ? `<div class="muted" style="margin-top:4px">${dateStr}</div>` : ''}</div>`;
@@ -299,39 +299,41 @@ function renderPerStockCard(s) {
 // 交易明细表（分页 + 展开买卖依据 + K线回放）
 function renderTradesTable(container, trades) {
   paginate(container, trades, (c, pageItems) => {
-    const tb = h(`<div style="overflow-x:auto"><table class="trade-table">
-      <thead><tr><th>股票</th><th>买入</th><th>卖出</th><th>天数</th><th>盈亏%</th><th>原因</th><th>回放</th></tr></thead>
-      <tbody></tbody></table></div>`);
-    const tbody = tb.querySelector('tbody');
     for (const t of pageItems) {
-      const tr = h(`<tr data-code="${esc(t.code)}">
-        <td><b>${esc(t.name)}</b><div class="muted" style="font-size:11px">${esc(t.code)}</div></td>
-        <td>${esc(t.entry_date)}<div class="muted" style="font-size:11px">@${fmtPrice(t.entry_price)}</div></td>
-        <td>${esc(t.exit_date)}<div class="muted" style="font-size:11px">@${fmtPrice(t.exit_price)}</div></td>
-        <td>${t.holding_days}</td>
-        <td class="${pctClass(t.pnl_pct)}">${fmtPct(t.pnl_pct)}<div class="muted" style="font-size:11px">${fmtMoney(t.pnl)}</div></td>
-        <td><span class="badge ${esc(t.exit_reason)}">${EXIT_LABEL[t.exit_reason] || esc(t.exit_reason)}</span></td>
-        <td><button class="btn sm replay-btn" data-code="${esc(t.code)}">K线回放</button></td>
-      </tr>`);
-      const detail = h(`<tr class="trade-detail" style="display:none"><td colspan="7" style="padding:0">
-        <div style="padding:4px 8px">
+      const card = h(`<div class="card trade-card" data-code="${esc(t.code)}">
+        <div class="trade-card-head" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer">
+          <div style="min-width:0">
+            <b>${esc(t.name)}</b> <span class="muted" style="font-size:12px">${esc(t.code)}</span>
+          </div>
+          <span class="${pctClass(t.pnl_pct)}" style="font-weight:700;font-size:16px;flex-shrink:0">${fmtPct(t.pnl_pct)}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;font-size:13px">
+          <div><span class="muted">买入</span> ${esc(t.entry_date)} <span class="muted">@${fmtPrice(t.entry_price)}</span></div>
+          <div><span class="muted">卖出</span> ${esc(t.exit_date)} <span class="muted">@${fmtPrice(t.exit_price)}</span></div>
+          <div><span class="muted">持仓</span> ${t.holding_days} 天</div>
+          <div><span class="badge ${esc(t.exit_reason)}">${EXIT_LABEL[t.exit_reason] || esc(t.exit_reason)}</span></div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:10px">
+          <button class="btn sm secondary trade-detail-btn" style="flex:1">买卖依据</button>
+          <button class="btn sm replay-btn" data-code="${esc(t.code)}" style="flex:1">K线回放</button>
+        </div>
+        <div class="trade-detail" style="display:none;margin-top:10px">
           <div class="muted" style="font-size:11px;margin:4px 0">买入依据</div>${evHtml(t.entry_evidence)}
           <div class="muted" style="font-size:11px;margin:4px 0">卖出依据</div>${evHtml(t.exit_evidence)}
-        </div></td></tr>`);
-      tr.onclick = () => {
-        const visible = detail.style.display !== 'none';
-        detail.style.display = visible ? 'none' : '';
-        if (!visible) tr.insertAdjacentElement('afterend', detail);
-        else detail.remove();
+        </div>
+      </div>`);
+      const toggleDetail = () => {
+        const detail = card.querySelector('.trade-detail');
+        detail.style.display = detail.style.display === 'none' ? '' : 'none';
       };
-      const rb = tr.querySelector('.replay-btn');
-      rb.onclick = (e) => {
-        e.stopPropagation(); // 不触发行展开/收起
+      card.querySelector('.trade-card-head').onclick = toggleDetail;
+      card.querySelector('.trade-detail-btn').onclick = (e) => { e.stopPropagation(); toggleDetail(); };
+      card.querySelector('.replay-btn').onclick = (e) => {
+        e.stopPropagation();
         openReplay(t.code, t.name, trades.filter((x) => x.code === t.code));
       };
-      tbody.appendChild(tr);
+      c.appendChild(card);
     }
-    c.appendChild(tb);
   }, 20);
 }
 

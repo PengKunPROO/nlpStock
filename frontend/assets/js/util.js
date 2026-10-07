@@ -40,6 +40,27 @@ export const VOL_STATE = {
 export const EXIT_LABEL = {
   signal: '信号离场', stop_loss: '止损', max_hold: '超时平仓', take_profit: '止盈', end_of_data: '期末估值',
 };
+
+// 内部字段 → 中文（持仓状态字段 + 基础价格字段），供条件表达式/依据中文化
+export const FIELD_LABELS = {
+  pnl_pct: '浮盈亏%', hold_days: '持仓天数', dd_from_peak: '距高点回撤%', cost: '成本价',
+  open: '开盘价', high: '最高价', low: '最低价', close: '收盘价', volume: '成交量',
+};
+
+// 泛化：把条件表达式（如 "pnl_pct <= -5.0"）里的内部字段名翻译成中文
+// 覆盖所有内部字段 + lag/right_lag 时序标记，指标 id（ma5/dif 等）保持原样（相对可读）
+export function localizeExpr(expr) {
+  if (!expr) return expr;
+  let s = String(expr);
+  // 字段名 → 中文（按 key 长度降序，避免短名误匹配长名子串）
+  for (const k of Object.keys(FIELD_LABELS).sort((a, b) => b.length - a.length)) {
+    s = s.replace(new RegExp(`\\b${k}\\b`, 'g'), FIELD_LABELS[k]);
+  }
+  // 时序标记
+  s = s.replace(/right_lag=(\d+)/g, '右移$1日');
+  s = s.replace(/lag=(\d+)/g, '前移$1日');
+  return s;
+}
 export function h(html) {
   const t = document.createElement('template');
   t.innerHTML = html.trim();

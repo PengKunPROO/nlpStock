@@ -5,9 +5,9 @@ const MA_STYLE = {
 const UP = '#FA5151';
 const DOWN = '#07C160';
 
-const MARK_SIZE = 8; // 买卖点三角标尺寸（px）
-const MARK_OFF = 12; // 距价格点的垂直偏移（buy 在下方 / sell 在上方）
-const MARK_HIT = 14; // 命中判定半径（px）
+const MARK_SIZE = 12; // 买卖点三角标尺寸（px，加大更醒目）
+const MARK_OFF = 16; // 距价格点的垂直偏移（buy 在下方 / sell 在上方，加大避免与 K 线重叠）
+const MARK_HIT = 16; // 命中判定半径（px）
 
 export function renderKline(canvas, bars, opts = {}) {
   const ctx = canvas.getContext('2d');
@@ -68,6 +68,7 @@ export function renderKline(canvas, bars, opts = {}) {
     const styles = getComputedStyle(document.documentElement);
     const cSep = styles.getPropertyValue('--sep').trim() || 'rgba(120,120,128,0.2)';
     const cText3 = styles.getPropertyValue('--text-3').trim() || '#8E8E93';
+    const cBg = styles.getPropertyValue('--bg').trim() || '#FFFFFF'; // 用于买卖点描边，从 K 线中凸显
 
     const yMain = (v) => padT + (1 - (v - lo) / (hi - lo)) * mainH;
     const yVol = (v) => (volMax ? padT + mainH + gap + (1 - v / volMax) * volH : padT + mainH + gap + volH);
@@ -146,7 +147,10 @@ export function renderKline(canvas, bars, opts = {}) {
         ctx.arc(x, y, 4, 0, Math.PI * 2);
         ctx.fill();
       } else {
-        ctx.fillStyle = m.type === 'buy' ? UP : DOWN;
+        const color = m.type === 'buy' ? UP : DOWN;
+        ctx.fillStyle = color;
+        ctx.strokeStyle = cBg; // 背景色描边，从 K 线中凸显
+        ctx.lineWidth = 2;
         ctx.beginPath();
         if (m.type === 'buy') {
           ctx.moveTo(x, y - MARK_SIZE / 2);
@@ -159,6 +163,7 @@ export function renderKline(canvas, bars, opts = {}) {
         }
         ctx.closePath();
         ctx.fill();
+        ctx.stroke(); // 描边凸显
       }
       markerPts.push({ m, x, y });
     }
