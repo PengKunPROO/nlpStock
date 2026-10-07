@@ -69,7 +69,12 @@ export function h(html) {
 export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+// 触觉反馈（Android WebView navigator.vibrate；不支持时静默忽略）
+export function haptic(pattern = 12) {
+  try { if (navigator.vibrate) navigator.vibrate(pattern); } catch { /* 忽略 */ }
+}
 export function toast(msg, isErr = false) {
+  haptic(isErr ? [30, 40, 30] : 12); // 错误双重短震，成功轻震
   const el = h(`<div class="toast${isErr ? ' err' : ''}">${esc(msg)}</div>`);
   document.getElementById('toast-root').appendChild(el);
   setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .25s'; setTimeout(() => el.remove(), 260); }, isErr ? 3500 : 2200);
