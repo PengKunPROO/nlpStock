@@ -3,7 +3,7 @@ import { api } from '../api.js';
 import state from '../store.js';
 import { MA_LEGEND, renderKline } from '../chart/kline.js';
 import { renderWatchlistView } from './watchlist.js';
-import { VOL_STATE, debounce, esc, fmtPct, fmtPrice, fmtTurnover, fmtVolume, h, pctClass, toast } from '../util.js';
+import { VOL_STATE, debounce, esc, fmtPct, fmtPrice, fmtTurnover, fmtVolume, h, pctClass, placeFloating, toast } from '../util.js';
 
 const PERIODS = [
   { v: '5d', label: '5日' }, { v: '1d', label: '日' }, { v: '1w', label: '周' }, { v: '1M', label: '月' }, { v: '1y', label: '年' },
@@ -253,10 +253,7 @@ function renderVisible() {
 }
 
 function placeTip(tip, pos, width) {
-  const flip = pos.x > width - 190;
-  tip.style.left = flip ? 'auto' : `${Math.max(4, pos.x + 14)}px`;
-  tip.style.right = flip ? `${Math.max(4, width - pos.x + 14)}px` : 'auto';
-  tip.style.display = 'block';
+  placeFloating(tip, pos.x, width, { gap: 14 });
 }
 
 function showTip(tip, bar, prevClose, pos, width) {

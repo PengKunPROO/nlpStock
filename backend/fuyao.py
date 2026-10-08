@@ -32,7 +32,7 @@ class FuyaoClient:
         api_key: str,
         base_url: str = "https://fuyao.aicubes.cn",
         min_interval: float = 0.15,
-        timeout: float = 30.0,
+        timeout: float = 15.0,
         max_retries: int = 3,
         retry_delay: float = 1.0,
         transport: httpx.BaseTransport | None = None,

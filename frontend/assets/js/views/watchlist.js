@@ -18,7 +18,7 @@ export async function renderWatchlistView(view) {
       <div class="card"><div class="empty">还没有自选股分组。<br>创建一个分组，然后搜索添加股票。</div></div>
       <button class="btn" id="wl-new-group">＋ 新建分组</button>`;
     document.getElementById('wl-new-group').onclick = () => promptName(view, '新建分组', '').then((name) => {
-      if (!name) return;
+      if (!name) { renderWatchlistView(view); return; }  // 取消：恢复列表
       api.createWatchlistGroup(name).then(() => renderWatchlistView(view)).catch((e) => toast(`创建失败：${e.message}`, true));
     });
     return;
@@ -51,11 +51,11 @@ function renderBody(view, groups) {
     b.onclick = () => { currentGroupId = Number(b.dataset.gid); renderBody(view, groups); };
   });
   document.getElementById('wl-add-group').onclick = () => promptName(view, '新建分组', '').then((name) => {
-    if (!name) return;
+    if (!name) { renderBody(view, groups); return; }  // 取消：恢复列表
     api.createWatchlistGroup(name).then(() => { currentGroupId = null; renderWatchlistView(view); }).catch((e) => toast(`创建失败：${e.message}`, true));
   });
   document.getElementById('wl-rename').onclick = () => promptName(view, '重命名分组', group.name).then((name) => {
-    if (!name || name === group.name) return;
+    if (!name || name === group.name) { renderBody(view, groups); return; }  // 取消或未改：恢复列表
     api.renameWatchlistGroup(gid, name).then(() => renderWatchlistView(view)).catch((e) => toast(`重命名失败：${e.message}`, true));
   });
   document.getElementById('wl-del-group').onclick = () => {

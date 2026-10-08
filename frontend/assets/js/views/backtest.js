@@ -4,7 +4,7 @@ import { runJob, getActiveJob } from '../jobs.js';
 import state from '../store.js';
 import { renderEquity } from '../chart/equity.js';
 import { renderKline } from '../chart/kline.js';
-import { EXIT_LABEL, esc, fmtMoney, fmtPct, fmtPrice, h, paginate, pctClass, toast, dateToday, daysAgo, localizeExpr } from '../util.js';
+import { EXIT_LABEL, esc, fmtMoney, fmtPct, fmtPrice, h, paginate, pctClass, placeFloating, toast, dateToday, daysAgo, localizeExpr } from '../util.js';
 
 const metric = (k, v, cls = '') => `<div class="metric"><div class="k">${k}</div><div class="v ${cls}">${v ?? '—'}</div></div>`;
 
@@ -252,9 +252,7 @@ function renderReport(el, result) {
       tipEl.innerHTML = `<div style="font-weight:700">${esc(pt.date)}</div>
         <div class="t-row"><span>净值</span><span class="mono">${fmtMoney(pt.value)}</span></div>
         <div class="t-row"><span>回撤</span><span class="mono down">${fmtPct(pt.drawdown_pct, false)}</span></div>`;
-      const flip = pos.x > width - 170;
-      tipEl.style.left = flip ? 'auto' : `${pos.x + 12}px`;
-      tipEl.style.right = flip ? '12px' : 'auto';
+      placeFloating(tipEl, pos.x, width, { gap: 12 });
       tipEl.style.top = '26px';
     },
   });
@@ -387,10 +385,7 @@ async function openReplay(code, name, trades) {
 
   const tip = overlay.querySelector('#replay-tip');
   const placeTip = (pos, width) => {
-    const flip = pos.x > width - 200;
-    tip.style.left = flip ? 'auto' : `${Math.max(4, pos.x + 14)}px`;
-    tip.style.right = flip ? `${Math.max(4, width - pos.x + 14)}px` : 'auto';
-    tip.style.display = 'block';
+    placeFloating(tip, pos.x, width, { gap: 14 });
   };
   const showBarTip = (bar, prevClose, pos, width) => {
     const chg = prevClose ? (bar.close / prevClose - 1) * 100 : null; // 当日涨跌幅（收盘 vs 前日收盘）

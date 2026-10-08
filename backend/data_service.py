@@ -67,7 +67,8 @@ class DataService:
         if cached and len(cached) >= count:
             start = have_last - 5 * DAY_MS  # incremental tail refresh
         else:
-            start = target_end - 3 * count * DAY_MS
+            # 首次拉取：仅需 count + 缓冲（MA60 需前 60 根），避免拉 4 年数据导致扶摇 historical 接口 5002 超时
+            start = target_end - (count + 100) * DAY_MS
         bars = self._fetch(thscode, kind, max(start, 0), target_end)
         if bars:
             self.storage.upsert_klines(thscode, bars)

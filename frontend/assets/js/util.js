@@ -133,3 +133,27 @@ export function paginate(container, items, renderPage, pageSize = 20) {
   };
   render();
 }
+
+// 浮层智能定位：优先放点击点右侧，放不下则放左侧，动态测量宽度并 clamp 到容器内。
+// 统一处理所有浮层（K线 tip / 回测回放 tip / 净值曲线 tip）溢出屏幕的问题，避免各处硬编码宽度估算。
+export function placeFloating(el, posX, containerWidth, opts = {}) {
+  const margin = opts.margin ?? 4;   // 距容器边缘最小距离
+  const gap = opts.gap ?? 12;        // 距点击点的水平间隙
+  el.style.display = 'block';        // 先显示才能测到真实宽度（offsetWidth）
+  const w = el.offsetWidth || (opts.minWidth ?? 160);
+  // 1) 优先放右边
+  if (posX + gap + w <= containerWidth - margin) {
+    el.style.left = `${posX + gap}px`;
+    el.style.right = 'auto';
+    return;
+  }
+  // 2) 放左边（翻转）
+  if (posX - gap - w >= margin) {
+    el.style.left = 'auto';
+    el.style.right = `${containerWidth - posX + gap}px`;
+    return;
+  }
+  // 3) 极端：浮层比容器还宽，左对齐 clamp 到 margin
+  el.style.left = `${margin}px`;
+  el.style.right = 'auto';
+}
