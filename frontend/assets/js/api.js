@@ -11,16 +11,31 @@ async function request(method, path, body) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);
   }
-  const resp = await fetch(BASE + path, opts);
-  let data = null;
-  try { data = await resp.json(); } catch { /* empty body */ }
-  if (!resp.ok) {
-    const err = data && data.error ? data.error : { code: 'http_' + resp.status, message: `HTTP ${resp.status}` };
-    const e = new Error(err.message || '请求失败');
-    e.code = err.code; e.raw = err.raw; e.status = resp.status;
+  // 超时保护：后端无响应时避免前端永久 pending（转圈卡死）
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  opts.signal = controller.signal;
+  try {
+    const resp = await fetch(BASE + path, opts);
+    let data = null;
+    try { data = await resp.json(); } catch { /* empty body */ }
+    if (!resp.ok) {
+      const err = data && data.error ? data.error : { code: 'http_' + resp.status, message: `HTTP ${resp.status}` };
+      const e = new Error(err.message || '请求失败');
+      e.code = err.code; e.raw = err.raw; e.status = resp.status;
+      throw e;
+    }
+    return data;
+  } catch (e) {
+    if (e && e.name === 'AbortError') {
+      const err = new Error('请求超时，请检查网络后重试');
+      err.code = 'timeout';
+      throw err;
+    }
     throw e;
+  } finally {
+    clearTimeout(timer);
   }
-  return data;
 }
 
 export const api = {

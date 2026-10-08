@@ -310,8 +310,8 @@ code.json-box { display: block; white-space: pre; font-family: "SF Mono", ui-mon
 
 /* ---- 动效与反馈 ---- */
 
-/* view 切换过渡（仅首次进入，非静默刷新） */
-.view.enter > * { animation: view-in var(--dur-slow) var(--ease); }
+/* view 切换过渡（仅首次进入，非静默刷新）；排除 spinner，避免 view-in 覆盖 spin 动画导致转圈图标静止 */
+.view.enter > *:not(.spinner) { animation: view-in var(--dur-slow) var(--ease); }
 @keyframes view-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
 /* 可点击卡片：桌面 hover 抬升 + 移动 press 缩放 */

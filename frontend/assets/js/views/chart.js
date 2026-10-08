@@ -129,6 +129,12 @@ function renderLegend() {
   }
 }
 
+// 关闭搜索下拉：绑定在模块顶层一次（避免 bindSearch 每次 renderChartView 累积 document 监听器）
+document.addEventListener('click', (e) => {
+  const drop = document.getElementById('chart-drop');
+  if (drop && !e.target.closest('.search-box')) drop.style.display = 'none';
+});
+
 function bindSearch(view) {
   const input = document.getElementById('chart-search');
   const drop = document.getElementById('chart-drop');
@@ -156,9 +162,6 @@ function bindSearch(view) {
     }
   }, 300);
   input.addEventListener('input', doSearch);
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('.search-box')) drop.style.display = 'none';
-  });
 }
 
 async function loadChart
