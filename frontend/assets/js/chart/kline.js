@@ -257,7 +257,7 @@ export function renderKline(canvas, bars, opts = {}) {
     const rawX = ev.clientX - rect.left - padL;
     const vidx = Math.max(0, Math.min(visibleCount - 1, Math.floor(rawX / step)));
     crosshair = { vidx };
-    if (opts.onCrosshair) opts.onCrosshair(bars[offset + vidx], pos, rect.width);
+    if (opts.onCrosshair) opts.onCrosshair(bars[offset + vidx], (offset + vidx) > 0 ? bars[offset + vidx - 1] : null, pos, rect.width);
     draw();
   };
   const onPointerUp = (ev) => {
@@ -269,7 +269,7 @@ export function renderKline(canvas, bars, opts = {}) {
       // 位移小 → 视为点击（显示浮层，用高亮虚线替代十字光标）
       const vidx = toIdx(ev.clientX, ev.clientY);
       crosshair = null;
-      if (opts.onCrosshair) opts.onCrosshair(null, pos, rect.width);
+      if (opts.onCrosshair) opts.onCrosshair(null, null, pos, rect.width);
       if (vidx === null) {
         if (highlightIdx !== undefined) { highlightIdx = undefined; draw(); }
         if (opts.onBlankTap) opts.onBlankTap(pos, rect.width);

@@ -219,9 +219,9 @@ function renderVisible() {
     offset: startIdx,
     onOffsetChange: (newOffset) => { startIdx = newOffset; },
     markers: allMarkers,
-    onCrosshair: (bar, pos, width) => {
+    onCrosshair: (bar, prevBar, pos, width) => {
       // 拖动时实时跟随显示对应 K 线信息
-      if (bar) showTip(tip, bar, pos, width);
+      if (bar) showTip(tip, bar, prevBar ? prevBar.close : null, pos, width);
       else hideTip();
     },
     onBarTap: (bar, idx, pos, width) => {
@@ -232,7 +232,7 @@ function renderVisible() {
         return false; // 通知 kline 不要绘制高亮虚线
       }
       selectedIdx = idx;
-      showTip(tip, bar, pos, width);
+      showTip(tip, bar, idx > 0 ? allBars[idx - 1].close : null, pos, width);
     },
     onMarkerTap: (m, pos, width) => {
       // 信号点点击：显示信号日
@@ -256,9 +256,9 @@ function placeTip(tip, pos, width) {
   tip.style.display = 'block';
 }
 
-function showTip(tip, bar, pos, width) {
+function showTip(tip, bar, prevClose, pos, width) {
   const vs = VOL_STATE[bar.vol_state] || { label: '—', cls: 'chip' };
-  const chg = bar.open ? (bar.close / bar.open - 1) * 100 : null;
+  const chg = prevClose ? (bar.close / prevClose - 1) * 100 : null; // 当日涨跌幅（收盘 vs 前日收盘，与行情软件一致）
   const mas = [['MA5', bar.ma5], ['MA10', bar.ma10], ['MA20', bar.ma20], ['MA60', bar.ma60]]
     .filter(([, v]) => v !== null && v !== undefined)
     .map(([k, v]) => `${k} ${fmtPrice(v)}`)

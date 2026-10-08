@@ -392,8 +392,8 @@ async function openReplay(code, name, trades) {
     tip.style.right = flip ? `${Math.max(4, width - pos.x + 14)}px` : 'auto';
     tip.style.display = 'block';
   };
-  const showBarTip = (bar, pos, width) => {
-    const chg = bar.open ? (bar.close / bar.open - 1) * 100 : null;
+  const showBarTip = (bar, prevClose, pos, width) => {
+    const chg = prevClose ? (bar.close / prevClose - 1) * 100 : null; // 当日涨跌幅（收盘 vs 前日收盘）
     tip.innerHTML = `
       <div style="font-weight:700;margin-bottom:2px">${esc(bar.date)}</div>
       <div class="t-row"><span>开盘</span><span class="mono ${pctClass(bar.close - bar.open)}">${fmtPrice(bar.open)}</span></div>
@@ -419,9 +419,9 @@ async function openReplay(code, name, trades) {
     replayCleanup = renderKline(canvas, bars, {
       visibleCount: 60,
       markers,
-      onCrosshair: (bar, pos, width) => {
+      onCrosshair: (bar, prevBar, pos, width) => {
         // 拖动时实时跟随显示对应 K 线信息
-        if (bar) showBarTip(bar, pos, width);
+        if (bar) showBarTip(bar, prevBar ? prevBar.close : null, pos, width);
         else tip.style.display = 'none';
       },
       onMarkerTap: (m, pos, width) => {
@@ -434,7 +434,7 @@ async function openReplay(code, name, trades) {
         placeTip(pos, width);
       },
       onBarTap: (bar, idx, pos, width) => {
-        showBarTip(bar, pos, width);
+        showBarTip(bar, idx > 0 ? bars[idx - 1].close : null, pos, width);
         return true;
       },
       onBlankTap: () => { tip.style.display = 'none'; },
