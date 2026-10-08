@@ -118,12 +118,12 @@ export function navigate(tab, query = '') {
 export function refresh() { render(); }
 
 window.addEventListener('hashchange', () => {
-  // 切 Tab：策略页的 detail/review 是临时子视图，切走再切回应回列表（避免卡在详情/审查页，丢失新建按钮）
+  // 切 Tab：清理所有临时子视图状态。sub 可能是策略页的 detail/review（临时子页），
+  // 也可能是行情页的 kline/watchlist（自选股点击进入 K线会设 sub='kline'）。
+  // 残留会导致目标页 sub 不匹配任何分支 → view 停留在 spinner 空白（白屏）。
   const view = document.getElementById('view');
-  if (view.dataset.sub === 'detail' || view.dataset.sub === 'review') {
-    delete view.dataset.sub;
-    delete view.dataset.sid;
-  }
+  delete view.dataset.sub;
+  delete view.dataset.sid;
   render();
 });
 window.addEventListener('error', (e) => { if (e.message) console.warn(e.message); });

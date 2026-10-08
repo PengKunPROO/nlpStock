@@ -39,7 +39,9 @@ function renderTypeSeg(view) {
 }
 
 export async function renderStrategyView(view) {
-  const sub = view.dataset.sub || 'list';
+  let sub = view.dataset.sub || 'list';
+  // 未知 sub（如行情页残留的 kline/watchlist）回退到列表，避免白屏
+  if (!['list', 'new', 'review', 'detail'].includes(sub)) sub = 'list';
   view.classList.toggle('chat-mode', sub === 'new');
   if (sub === 'list') await renderList(view);
   else if (sub === 'new') renderChat(view);
