@@ -365,7 +365,7 @@ def _merge_return(per_stock: list[dict], initial_cash: float) -> list[dict]:
         return []
     all_dates = sorted({e["date"] for c in curves for e in c})
     out: list[dict] = []
-    peak = 0.0
+    peak_net = 1.0  # 峰值净值（= 1 + 峰值收益率）
     n_stocks = len(curves)
     for date in all_dates:
         total_ret = 0.0
@@ -378,9 +378,15 @@ def _merge_return(per_stock: list[dict], initial_cash: float) -> list[dict]:
                     break
             total_ret += (v / initial_cash - 1) * 100.0
         avg_ret = total_ret / n_stocks
-        peak = max(peak, avg_ret)
-        dd = avg_ret - peak
-        out.append({"date": date, "value": round(avg_ret, 3), "drawdown_pct": round(dd, 3)})
+        net = 1.0 + avg_ret / 100.0
+        peak_net = max(peak_net, net)
+        dd = (net / peak_net - 1) * 100.0 if peak_net else 0.0  # 相对峰值净值的回撤（%）
+        out.append({
+            "date": date,
+            "value": round(avg_ret, 3),
+            "drawdown_pct": round(dd, 3),
+            "peak": round((peak_net - 1.0) * 100.0, 3),  # 峰值收益率（%），供浮层展示
+        })
     return out
 
 

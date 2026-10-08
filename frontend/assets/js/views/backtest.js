@@ -262,7 +262,7 @@ function renderReport(el, result) {
         canvas.parentElement.appendChild(tipEl);
         canvas.parentElement.style.position = 'relative';
       }
-      const peak = pt.value - (pt.drawdown_pct || 0);  // 峰值收益率 = 累计收益 - 回撤
+      const peak = pt.peak;  // 峰值收益率（后端直接输出）
       tipEl.innerHTML = `<div style="font-weight:700;margin-bottom:2px">${esc(pt.date)}</div>
         <div class="t-row"><span>累计收益</span><span class="mono ${pctClass(pt.value)}">${fmtPct(pt.value, true)}</span></div>
         <div class="t-row"><span>峰值收益</span><span class="mono up">${fmtPct(peak, true)}</span></div>

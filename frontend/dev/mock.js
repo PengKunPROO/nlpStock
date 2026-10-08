@@ -300,11 +300,11 @@
     };
   }
 
-  // 合并收益率：按日期对齐，等权平均收益率%（未入场票按 0% 计），回撤为相对峰值收益率的百分点
+  // 合并收益率：按日期对齐，等权平均收益率%（未入场票按 0% 计），回撤为相对峰值净值的回撤%
   function mergeCurves(perStock, initialCash) {
     const allDates = [...new Set(perStock.flatMap((r) => r.equity_curve.map((e) => e.date)))].sort();
     const n = perStock.length || 1;
-    let peak = 0;
+    let peakNet = 1;
     return allDates.map((date) => {
       let totalRet = 0;
       for (const r of perStock) {
@@ -315,8 +315,10 @@
         totalRet += (v / initialCash - 1) * 100;
       }
       const avg = totalRet / n;
-      peak = Math.max(peak, avg);
-      return { date, value: Math.round(avg * 100) / 100, drawdown_pct: Math.round((avg - peak) * 100) / 100 };
+      const net = 1 + avg / 100;
+      peakNet = Math.max(peakNet, net);
+      const dd = (net / peakNet - 1) * 100;
+      return { date, value: Math.round(avg * 100) / 100, drawdown_pct: Math.round(dd * 100) / 100, peak: Math.round((peakNet - 1) * 100 * 100) / 100 };
     });
   }
 
