@@ -2,6 +2,7 @@
 import { api } from '../api.js';
 import state from '../store.js';
 import { esc, h, toast } from '../util.js';
+import { renderJsonTree } from '../json-tree.js';
 
 const EXAMPLE_TEXT = '1，阴跌之后等急跌，\n2，急跌之后等止跌，(均线拧到一块是止跌信号)\n3，止跌之后等反转(底部放量，阳线实体越来越大，价格站上关键均线才是反转信号)，\n4，反转之后等进场(拉一波再缩量回踩不破前期箱体上沿，确认支撑有效，说明主力锁仓，这时候才可以进)，\n5，力竭出现，因为量能跟不上，出现上影线，越来越短的阳线，都是力竭信号\n6，力竭后的离场，不舍得卖啊，这时落袋才是利润，\n7，离场之后等待回落，千万别追，\n8，回调支撑如果被击穿就不要进了。';
 
@@ -711,14 +712,28 @@ async function renderDetail(view, sid) {
     </div>
     <div class="section-title">版本历史（可审查 / 恢复）</div>
     <div class="group" id="ver-list"></div>
-    <div class="section-title">当前配置 JSON</div>
-    <div class="card"><code class="json-box">${esc(JSON.stringify(cfg, null, 2))}</code></div>
+    <div class="section-title">配置（可直接编辑，点「▸」展开，改完点保存）</div>
+    <div class="card" id="cfg-editor"></div>
+    <button class="btn" id="cfg-save" style="margin-top:10px">保存修改（存新版本）</button>
   `;
   document.getElementById('d-back').onclick = () => go('list');
   document.getElementById('d-edit').onclick = () => {
     state.draftConfig = JSON.parse(JSON.stringify(cfg));
     view.dataset.stratType = isTrading ? 'trading' : 'screening';
     go('review');
+  };
+  // 可编辑 JSON 树：就地修改 cfg，保存生成新版本
+  renderJsonTree(document.getElementById('cfg-editor'), cfg);
+  document.getElementById('cfg-save').onclick = async (ev) => {
+    ev.target.disabled = true;
+    try {
+      const updated = await api.updateStrategy(sid, cfg);
+      toast(`已保存 v${updated.version}`);
+      renderDetail(view, sid);
+    } catch (e) {
+      toast(`保存失败：${e.message}${e.raw ? '（' + String(e.raw).slice(0, 160) + '）' : ''}`, true);
+      ev.target.disabled = false;
+    }
   };
   const screenBtn = document.getElementById('d-screen');
   if (screenBtn) {

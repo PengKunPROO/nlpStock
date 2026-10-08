@@ -331,3 +331,21 @@ code.json-box { display: block; white-space: pre; font-family: "SF Mono", ui-mon
   .field-row { gap: 14px; }
   .card { padding: 18px; }
 }
+
+/* ---- 可编辑 JSON 树（策略配置）---- */
+.jt-obj { display: flex; flex-direction: column; gap: 6px; }
+.jt-row { display: flex; align-items: center; gap: 10px; min-height: 38px; }
+.jt-key { flex-shrink: 1; min-width: 0; max-width: 46%; color: var(--text-2); font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jt-row input, .jt-row select { flex: 1; min-width: 0; }
+.jt-sec { border-left: 2px solid var(--sep); margin-left: 4px; padding-left: 10px; }
+.jt-head { display: flex; align-items: center; gap: 6px; padding: 8px 0; cursor: pointer; -webkit-tap-highlight-color: transparent; min-height: 40px; }
+.jt-caret { color: var(--text-3); font-size: 12px; width: 14px; flex-shrink: 0; }
+.jt-body { display: flex; flex-direction: column; gap: 6px; }
+.jt-item .jt-head > span:not(.jt-caret) { font-size: 13px; color: var(--text-2); }
+.jt-null { color: var(--text-3); font-style: italic; padding: 5px 10px; border: 1px dashed var(--sep); border-radius: 6px; cursor: pointer; font-size: 13px; }
+.jt-toggle { position: relative; display: inline-block; width: 40px; height: 24px; flex-shrink: 0; }
+.jt-toggle input { opacity: 0; width: 0; height: 0; }
+.jt-slider { position: absolute; inset: 0; background: var(--chip-bg); border-radius: 12px; transition: background var(--dur) var(--ease); }
+.jt-slider::before { content: ''; position: absolute; height: 18px; width: 18px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: transform var(--dur) var(--ease); box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
+.jt-toggle input:checked + .jt-slider { background: var(--accent); }
+.jt-toggle input:checked + .jt-slider::before { transform: translateX(16px); }
