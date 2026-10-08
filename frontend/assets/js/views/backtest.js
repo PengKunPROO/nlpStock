@@ -129,7 +129,7 @@ function renderPoolCard(el) {
       <b style="font-size:15px">回测池 <span class="chip accent" id="bt-pool-count">${pool.length}</span></b>
       <span class="muted" style="font-size:12px">${pool.length ? '每票独立账户回测，不轮动' : ''}</span>
     </div>
-    ${pool.length ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+    ${pool.length ? `<div id="bt-pool-chips" style="display:flex;flex-wrap:wrap;align-content:flex-start;gap:8px;margin-bottom:10px;max-height:136px;overflow-y:auto;-webkit-overflow-scrolling:touch">
       ${pool.map((pk, i) => `<span class="chip" style="display:inline-flex;align-items:center;gap:6px;padding:7px 10px">
         <b>${esc(pk.name)}</b>
         <span class="muted" style="font-size:11px">${esc(pk.thscode)}${pk.signal_date ? ' · 信号 ' + esc(pk.signal_date) : ''}</span>
