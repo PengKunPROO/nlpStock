@@ -117,7 +117,15 @@ export function navigate(tab, query = '') {
 
 export function refresh() { render(); }
 
-window.addEventListener('hashchange', render);
+window.addEventListener('hashchange', () => {
+  // 切 Tab：策略页的 detail/review 是临时子视图，切走再切回应回列表（避免卡在详情/审查页，丢失新建按钮）
+  const view = document.getElementById('view');
+  if (view.dataset.sub === 'detail' || view.dataset.sub === 'review') {
+    delete view.dataset.sub;
+    delete view.dataset.sid;
+  }
+  render();
+});
 window.addEventListener('error', (e) => { if (e.message) console.warn(e.message); });
 
 buildTabbar();
