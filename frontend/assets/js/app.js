@@ -20,7 +20,7 @@ const TABS = [
 const TITLES = {
   strategy: ['策略', '自然语言 · 量化配置 · 版本审查'],
   screen: ['选股', '按策略扫描股票池'],
-  backtest: ['回测', '胜率 · 回撤 · 净值曲线'],
+  backtest: ['回测', '胜率 · 回撤 · 收益率曲线'],
   chart: ['行情', 'K线 · 自选股'],
   settings: ['设置', '数据源与 AI 配置'],
 };

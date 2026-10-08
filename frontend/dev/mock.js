@@ -300,21 +300,23 @@
     };
   }
 
-  // 合并净值：按日期对齐，各票求和（未入场前按 initial_cash 计）
+  // 合并收益率：按日期对齐，等权平均收益率%（未入场票按 0% 计），回撤为相对峰值收益率的百分点
   function mergeCurves(perStock, initialCash) {
     const allDates = [...new Set(perStock.flatMap((r) => r.equity_curve.map((e) => e.date)))].sort();
+    const n = perStock.length || 1;
     let peak = 0;
     return allDates.map((date) => {
-      let total = 0;
+      let totalRet = 0;
       for (const r of perStock) {
         let v = initialCash;
         for (const e of r.equity_curve) {
           if (e.date <= date) v = e.value; else break;
         }
-        total += v;
+        totalRet += (v / initialCash - 1) * 100;
       }
-      peak = Math.max(peak, total);
-      return { date, value: Math.round(total), drawdown_pct: Math.round((total / peak - 1) * 1000) / 10 };
+      const avg = totalRet / n;
+      peak = Math.max(peak, avg);
+      return { date, value: Math.round(avg * 100) / 100, drawdown_pct: Math.round((avg - peak) * 100) / 100 };
     });
   }
 
@@ -412,7 +414,8 @@
       const winRates = perStock.map((r) => r.metrics.win_rate_pct).filter((v) => v !== null && v !== undefined);
       const closed = allTrades.filter((t) => t.exit_reason !== 'end_of_data');
       const winN = closed.filter((t) => t.pnl > 0).length;
-      const finalEq = mergedCurve.length ? mergedCurve[mergedCurve.length - 1].value : params.initial_cash * perStock.length;
+      const finalRet = mergedCurve.length ? mergedCurve[mergedCurve.length - 1].value : 0;  // 平均收益率%
+      const finalEq = perStock.reduce((a, r) => a + (r.metrics.final_equity || 0), 0);  // 总市值（供参考）
       const strategy = strategies.find((s) => s.id === Number(body.trading_strategy_id));
       finishJob(id, {
         params: {
@@ -425,7 +428,7 @@
           start: params.start, end: params.end,
           avg_total_return_pct: rets.length ? r2(rets.reduce((a, b) => a + b, 0) / rets.length) : 0,
           avg_win_rate_pct: winRates.length ? r2(winRates.reduce((a, b) => a + b, 0) / winRates.length) : null,
-          total_return_pct: r2((finalEq / (params.initial_cash * Math.max(perStock.length, 1)) - 1) * 100),
+          total_return_pct: r2(finalRet),
           max_drawdown_pct: r2(Math.min(0, ...mergedCurve.map((e) => e.drawdown_pct))),
           trade_count: closed.length,
           win_count: winN,

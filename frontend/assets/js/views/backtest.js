@@ -1,4 +1,4 @@
-// 回测 view: 勾选池独立回测（每票独立账户，不轮动）→ job → 报告（组合汇总 + 合并净值 + 每票明细）
+// 回测 view: 勾选池独立回测（每票独立账户，不轮动）→ job → 报告（组合汇总 + 收益率曲线 + 每票明细）
 import { api } from '../api.js';
 import { runJob, getActiveJob } from '../jobs.js';
 import state from '../store.js';
@@ -7,6 +7,15 @@ import { renderKline } from '../chart/kline.js';
 import { EXIT_LABEL, esc, fmtMoney, fmtPct, fmtPrice, h, paginate, pctClass, placeFloating, toast, dateToday, daysAgo, localizeExpr } from '../util.js';
 
 const metric = (k, v, cls = '') => `<div class="metric"><div class="k">${k}</div><div class="v ${cls}">${v ?? '—'}</div></div>`;
+
+// 点击净值浮层 / canvas 外关闭浮层（对齐 K线浮层关闭逻辑；模块顶层只绑定一次）
+document.addEventListener('pointerdown', (e) => {
+  const tip = document.getElementById('equity-tip');
+  if (!tip || tip.style.display === 'none') return;
+  if (tip.contains(e.target)) return;
+  if (e.target instanceof Element && e.target.closest('#equity-canvas')) return;
+  tip.style.display = 'none';
+});
 
 export async function renderBacktestView(view) {
   let strategies = [];
@@ -227,14 +236,15 @@ function renderReport(el, result) {
       </div>
     </div>
     <div class="metrics">
+      ${metric('总收益率', fmtPct(m.total_return_pct, true), pctClass(m.total_return_pct))}
       ${metric('最大回撤', fmtPct(m.max_drawdown_pct, false), 'down')}
       ${metric('交易次数', m.trade_count + '（盈' + (m.win_count ?? 0) + ' 亏' + (m.loss_count ?? 0) + '）')}
       ${metric('期末资产', fmtMoney(m.final_equity))}
     </div>
     <div class="card">
-      <h3>合并净值曲线与回撤</h3>
+      <h3>收益率曲线与回撤</h3>
       <canvas id="equity-canvas" class="equity" style="height:250px"></canvas>
-      <div class="muted" style="font-size:11px;margin-top:6px">合并净值 ${fmtMoney(m.final_equity)} · 红色区域为回撤（-30%满幅）· 触摸查看逐日数值</div>
+      <div class="muted" style="font-size:11px;margin-top:6px">等权平均收益率（每票独立账户，从 0% 开始） · 红色区域为回撤 · 拖动/点击查看逐日数值</div>
     </div>
     <div id="bt-per-stock"></div>
     <div class="hint">回测口径：每票独立账户（各 ${fmtMoney(p.initial_cash)}），信号日 T 收盘 → T+1 开盘买入（单仓 ${p.position_pct}%），卖出即结束、不轮动；含佣金（${p.fee_bps}bp/边）与印花税（${p.stamp_tax_bps}bp/卖出）。期末持仓按最后收盘估值，不计入胜率。</div>
@@ -243,14 +253,19 @@ function renderReport(el, result) {
   let tipEl = null;
   renderEquity(canvas, result.equity_curve || [], {
     onPoint: (pt, idx, pos, width) => {
+      if (!pt || !pos) {
+        if (tipEl) tipEl.style.display = 'none';  // 点击同一位置/空白 → 关闭
+        return;
+      }
       if (!tipEl) {
-        tipEl = h('<div class="kline-tip" style="position:absolute"></div>');
+        tipEl = h('<div class="kline-tip" id="equity-tip" style="position:absolute"></div>');
         canvas.parentElement.appendChild(tipEl);
         canvas.parentElement.style.position = 'relative';
       }
-      tipEl.style.display = 'block';
-      tipEl.innerHTML = `<div style="font-weight:700">${esc(pt.date)}</div>
-        <div class="t-row"><span>净值</span><span class="mono">${fmtMoney(pt.value)}</span></div>
+      const peak = pt.value - (pt.drawdown_pct || 0);  // 峰值收益率 = 累计收益 - 回撤
+      tipEl.innerHTML = `<div style="font-weight:700;margin-bottom:2px">${esc(pt.date)}</div>
+        <div class="t-row"><span>累计收益</span><span class="mono ${pctClass(pt.value)}">${fmtPct(pt.value, true)}</span></div>
+        <div class="t-row"><span>峰值收益</span><span class="mono up">${fmtPct(peak, true)}</span></div>
         <div class="t-row"><span>回撤</span><span class="mono down">${fmtPct(pt.drawdown_pct, false)}</span></div>`;
       placeFloating(tipEl, pos.x, width, { gap: 12 });
       tipEl.style.top = '26px';

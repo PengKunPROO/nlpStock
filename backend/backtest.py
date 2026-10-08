@@ -353,14 +353,22 @@ def _run_one_stock(
     }
 
 
-def _merge_equity(per_stock: list[dict], initial_cash: float) -> list[dict]:
-    """合并各票净值曲线：按日期对齐，求和（未入场前按 initial_cash 计，离场后按终值计）。"""
+def _merge_return(per_stock: list[dict], initial_cash: float) -> list[dict]:
+    """合并各票收益率曲线：按日期对齐，等权平均收益率（%），未入场票按 0% 计。
+
+    回测是「每票独立账户」（各自 initial_cash），不存在组合持仓概念，
+    故不再对净值求和（求和无意义），改输出等权平均收益率曲线（从 0% 开始）。
+    value = 平均收益率（%），drawdown_pct = 相对峰值收益率的回撤（百分点）。
+    """
     curves = [r["equity_curve"] for r in per_stock]
+    if not curves:
+        return []
     all_dates = sorted({e["date"] for c in curves for e in c})
     out: list[dict] = []
     peak = 0.0
+    n_stocks = len(curves)
     for date in all_dates:
-        total = 0.0
+        total_ret = 0.0
         for c in curves:
             v = initial_cash
             for e in c:
@@ -368,10 +376,11 @@ def _merge_equity(per_stock: list[dict], initial_cash: float) -> list[dict]:
                     v = e["value"]
                 else:
                     break
-            total += v
-        peak = max(peak, total)
-        dd = (total / peak - 1) * 100 if peak else 0.0
-        out.append({"date": date, "value": round(total, 2), "drawdown_pct": round(dd, 3)})
+            total_ret += (v / initial_cash - 1) * 100.0
+        avg_ret = total_ret / n_stocks
+        peak = max(peak, avg_ret)
+        dd = avg_ret - peak
+        out.append({"date": date, "value": round(avg_ret, 3), "drawdown_pct": round(dd, 3)})
     return out
 
 
@@ -451,7 +460,7 @@ def backtest_pool(
     all_trades: list[dict] = []
     for r in per_stock:
         all_trades.extend(r["trades"])
-    equity_curve = _merge_equity(per_stock, initial_cash)
+    equity_curve = _merge_return(per_stock, initial_cash)
 
     # 组合汇总
     rets = [r["metrics"]["total_return_pct"] for r in per_stock]
@@ -459,9 +468,10 @@ def backtest_pool(
     closed = [t for t in all_trades if t["exit_reason"] != "end_of_data"]
     wins = [t for t in closed if t["pnl"] > 0]
     losses = [t for t in closed if t["pnl"] <= 0]
-    merged_final = equity_curve[-1]["value"] if equity_curve else initial_cash * len(per_stock)
-    total_ret = (merged_final / (initial_cash * len(per_stock)) - 1) * 100 if per_stock else 0.0
-    max_dd = min((e["drawdown_pct"] for e in equity_curve), default=0.0)
+    # 总市值（各独立账户终值求和，仅作规模参考）；收益率/回撤取收益率曲线
+    merged_final = sum(r["metrics"]["final_equity"] for r in per_stock)
+    total_ret = equity_curve[-1]["value"] if equity_curve else 0.0  # 等权平均收益率（%）
+    max_dd = min((e["drawdown_pct"] for e in equity_curve), default=0.0)  # 回撤（百分点）
 
     return {
         "params": {
