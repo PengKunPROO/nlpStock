@@ -1,7 +1,6 @@
 # 自闭环 Android App（Chaquopy 内嵌 Python 后端）
 
 > 这是 **Termux-free** 的独立 App：Python 后端（FastAPI）内嵌在 APK 里，点开即用。
-> 与 `deploy/apk/`（Capacitor 套壳，依赖 Termux 跑后端）是两个不同方案，本方案是最终形态。
 
 ## 架构
 

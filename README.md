@@ -53,8 +53,8 @@ python -m backend.app --host 0.0.0.0 --port 8000
 ```
 手机浏览器打开 `http://localhost:8000`，菜单 →「添加到主屏幕」，即可全屏当 App 用。
 
-### 打包原生 APK（编译指南见 deploy/apk/BUILD_GUIDE.md）
-Capacitor WebView 外壳 + Termux 后端；手把手环境/构建/签名/安装/排错教程见 `deploy/apk/BUILD_GUIDE.md`。PWA「添加到主屏幕」为零成本替代方案。
+### 打包原生 APK（Chaquopy 内嵌后端，点开即用）
+自闭环 App（Chaquopy 内嵌 Python 后端 + WebView 前端，无 Termux 依赖）；环境/构建/签名/安装/排错教程见 `deploy/android/README.md`。PWA「添加到主屏幕」为零成本替代方案。
 
 ## 数据源与密钥
 
