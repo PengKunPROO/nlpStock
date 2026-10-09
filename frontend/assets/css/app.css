@@ -336,10 +336,13 @@ code.json-box { display: block; white-space: pre; font-family: "SF Mono", ui-mon
 .jt-obj { display: flex; flex-direction: column; gap: 6px; }
 .jt-row { display: flex; align-items: center; gap: 10px; min-height: 38px; }
 .jt-key { flex-shrink: 1; min-width: 0; max-width: 46%; color: var(--text-2); font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.jt-row input, .jt-row select { flex: 1; min-width: 0; }
+/* 可编辑的输入控件：白底 + 明显边框，一眼识别为「可编辑」（区别于浅灰的不可编辑标签/分组） */
+.jt-row input, .jt-row select { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--sep); }
 .jt-sec { border-left: 2px solid var(--sep); margin-left: 4px; padding-left: 10px; }
-.jt-head { display: flex; align-items: center; gap: 6px; padding: 8px 0; cursor: pointer; -webkit-tap-highlight-color: transparent; min-height: 40px; }
-.jt-caret { color: var(--text-3); font-size: 12px; width: 14px; flex-shrink: 0; }
+/* 折叠标题：浅灰圆角块，明显是「可点击展开的分组」，不是输入框 */
+.jt-head { display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: pointer; -webkit-tap-highlight-color: transparent; min-height: 40px; background: var(--chip-bg); border-radius: 8px; }
+.jt-head:active { background: var(--sep); }
+.jt-caret { color: var(--accent); font-size: 13px; width: 14px; flex-shrink: 0; }
 .jt-body { display: flex; flex-direction: column; gap: 6px; }
 .jt-item .jt-head > span:not(.jt-caret) { font-size: 13px; color: var(--text-2); }
 .jt-null { color: var(--text-3); font-style: italic; padding: 5px 10px; border: 1px dashed var(--sep); border-radius: 6px; cursor: pointer; font-size: 13px; }

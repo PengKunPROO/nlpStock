@@ -705,7 +705,6 @@ async function renderDetail(view, sid) {
         ${metaChips}
       </div>
       <div style="display:flex;gap:10px;margin-top:14px">
-        <button class="btn sm secondary" id="d-edit">编辑（存新版本）</button>
         ${isTrading ? '' : '<button class="btn sm secondary" id="d-screen">去选股</button>'}
         <button class="btn sm danger" id="d-del">删除</button>
       </div>
@@ -717,11 +716,6 @@ async function renderDetail(view, sid) {
     <button class="btn" id="cfg-save" style="margin-top:10px">保存修改（存新版本）</button>
   `;
   document.getElementById('d-back').onclick = () => go('list');
-  document.getElementById('d-edit').onclick = () => {
-    state.draftConfig = JSON.parse(JSON.stringify(cfg));
-    view.dataset.stratType = isTrading ? 'trading' : 'screening';
-    go('review');
-  };
   // 可编辑 JSON 树：就地修改 cfg，保存生成新版本
   renderJsonTree(document.getElementById('cfg-editor'), cfg);
   document.getElementById('cfg-save').onclick = async (ev) => {
